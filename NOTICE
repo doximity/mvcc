@@ -1,0 +1,22 @@
+mvcc
+Copyright 2026 Doximity, Inc.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+
+msl/mvcc_prelude.metal (erff, erfcf) uses the rational approximations of
+FreeBSD msun s_erff.c, which carries the following notice:
+
+  Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+
+  Developed at SunPro, a Sun Microsystems, Inc. business.
+  Permission to use, copy, modify, and distribute this
+  software is freely granted, provided that this notice
+  is preserved.
+
+--------------------------------------------------------------------------------
+
+Built mvcc-ir2msl binaries statically link LLVM (https://llvm.org), licensed
+under the Apache License v2.0 with LLVM Exceptions. Release archives include
+LLVM's license as LICENSE-LLVM.txt.

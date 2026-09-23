@@ -1,0 +1,11 @@
+# Hand-written INT4 m4 schedule that shares B fills in threadgroup.
+# `mvcc-ir2msl --stir-in gemm --sched-in tests/stir/int4_m4_share_b.sched` re-checks it.
+schedule int4_m4 why=share-B stages=1
+  stage 0 engine=tensor-op exchange=shuffle-tree prefetch=iteration-start predicate=select+clamp thread_scale=2 smem=16384
+    split m_lane coord=0 size=32 bind=lane
+    split n_sg coord=1 size=4 bind=simdgroup
+    split k_k coord=2 size=* bind=time
+    order k_k
+    storage t0 device
+    storage t1 threadgroup ring=2
+    storage t2 device

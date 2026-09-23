@@ -1,0 +1,14 @@
+# examples/qwen decode step (T=1): same-block edges. Consumer reads only bytes
+# the same producer block wrote (L11). Intermediates are not host-visible (L12).
+# bind:launch fuses the consumer; a refused fusion names L11.
+# Argmax partial→final is a cross-block edge — see qwen_l11_refuse.graph.
+embed_kernel rmsnorm_kernel hidden 1 0
+rmsnorm_kernel residual_rmsnorm_kernel hidden 1 0
+residual_rmsnorm_kernel shared_gate_combine_rmsnorm_kernel hidden 1 0
+sigmoid_gate_kernel attn_qk_norm_rope_kernel q 1 0
+attn_qk_norm_rope_kernel attn_partial_kernel q 1 0
+attn_partial_kernel attn_combine_kernel part 1 0
+attn_combine_kernel residual_rmsnorm_kernel attn_out 1 0
+silu_mul_kernel shared_gate_combine_rmsnorm_kernel sinter 1 0
+# layout conversions deleted by relayout: order/cache stay device-local
+# (no host-visible alias). A host-visible edge would refuse L12.

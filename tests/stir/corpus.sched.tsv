@@ -1,0 +1,22 @@
+# shipped schedule database: kernel, why, legality, prior seconds, measured seconds
+# residual = measured − prior. choose() uses prior+residual when it improves held-out order.
+gemm	source	legality: ok	0.010	0.009
+gemm	engine:tensor-op	legality: ok	0.008	0.007
+int4_decode	source	legality: ok	0.020	0.018
+int4_decode	share-B	legality: ok	0.016	0.015
+rms_norm_bf16_kernel	source	legality: ok	0.004	0.004
+residual_add_kernel	source	legality: ok	0.003	0.003
+router_softmax_topk_bf16_kernel	source	legality: ok	0.002	0.002
+silu_mul	source	legality: ok	0.003	0.003
+rope	source	legality: ok	0.003	0.003
+sgemm	source	legality: ok	0.012	0.011
+hgemm16	engine:tensor-op	legality: ok	0.006	0.006
+attn	source	legality: ok	0.015	0.014
+gdn	source	legality: ok	0.018	0.017
+gather	source	legality: ok	0.004	0.004
+rowsum	source	legality: ok	0.003	0.003
+softmax_row	source	legality: ok	0.005	0.005
+rmsnorm	source	legality: ok	0.004	0.004
+embed_row_kernel	source	legality: ok	0.002	0.002
+cache_append_row_kernel	source	legality: ok	0.002	0.002
+fill_positions_kernel	source	legality: ok	0.001	0.001

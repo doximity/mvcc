@@ -1,0 +1,49 @@
+# Cargo
+/target/
+
+# CMake / clang / objc tool builds (repo-root toolkit build and cpp/*/build)
+build/
+build-*/
+.cache/
+compile_commands.json
+CMakeUserPresets.json
+.clangd/
+
+# Assembled CUDA-toolkit layout (tools/install_toolkit.sh)
+/toolkit/
+
+# Release tarballs
+/dist/
+*.gem
+
+# Host-suite / ad-hoc kernel outputs
+tests/out/
+
+# Compiled objects and GPU binaries
+*.o
+*.a
+*.dylib
+*.so
+*.dSYM/
+*.metallib
+*.air
+
+# MVCC_KEEP intermediates next to compile outputs
+*.device.ll
+*.abi.json
+examples/hashhunt/.keep/
+examples/hashhunt/hashhunt
+examples/hashhunt/hashhunt_gpu
+examples/hashhunt/hashhunt_cpu
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+.idea/
+.env
+.env.*

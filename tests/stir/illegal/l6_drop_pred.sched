@@ -1,0 +1,7 @@
+# L6: guards exist but the schedule realizes none of them.
+schedule synthetic_silu why=illegal-L6
+  stage 0 engine=scalar-fma exchange=none prefetch=at-use predicate=none thread_scale=1 smem=0
+    split c0_lane coord=0 size=256 bind=lane
+    storage t0 device
+    storage t1 device
+    storage t2 device

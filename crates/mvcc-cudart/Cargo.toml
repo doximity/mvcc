@@ -1,0 +1,20 @@
+[package]
+name = "mvcc-cudart"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "mvcc: CUDA runtime API (libcudart) over Metal"
+
+[lib]
+name = "cudart"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+
+[build-dependencies]
+cc = "1"

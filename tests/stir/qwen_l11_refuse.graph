@@ -1,0 +1,2 @@
+# L11: consumer block reads bytes another block wrote (Metal has no grid barrier).
+argmax_partial_kernel argmax_final_kernel logits 0 0
