@@ -1,0 +1,906 @@
+silu_mul(float const*, float const*, float*, int): sig: T=256 threads-run=32 loops=0 (traversal 0, generic 0, bounded 0, refused 0) device-stores=35 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+coords: d=1 (output 1, reduction/traversal 0) axes=2 (sg/lane, loop levels 0; derived 0 in φ) sites fitted=4 data-dependent=0 non-affine=0
+  c0 (o) = 32*sg + lane
+  load %13 4B in %0 samples=35: addr = 1024*x+1*arg0 + (4)*c0
+  load %19 4B in %1 samples=35: addr = 1024*x+1*arg1 + (4)*c0
+  store store to %21 4B in %2 samples=35: addr = 1024*x+1*arg2 + (4)*c0
+  pred at %13 slt samples=35: lhs = 256*x+-1*arg3 + (1)*c0
+stir: tensors=3 coords=1 accesses=3 guards=1 loops=0 round-trip=105/105 samples
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 4B arg0[256*x + c0] at %13
+  load 4B arg1[256*x + c0] at %19
+  store 4B arg2[256*x + c0] at store to %21
+  guard slt lhs = 256*x+-1*arg3 + (1)*c0
+rowsum(float const*, float*, int): sig: T=128 threads-run=32 loops=1 (traversal 1, generic 0, bounded 0, refused 0) device-stores=1 shared-writes=12 shared-reads=16 barriers=1 tensor-calls=0
+  loop %25 depth=1 kind=traversal data-phis=1
+    phi %26 : induction terms=1
+    phi %27 : sum terms=1 init=identity
+    algebra: inductionx1 sumx1 -> permits: partition reorder tree-combine
+coords: d=1 (output 0, reduction/traversal 1) axes=3 (sg/lane, loop levels 1; derived 0 in φ) sites fitted=3 data-dependent=0 non-affine=0
+  c0 (r) = -32*sg + -1*lane + -128*i0
+  load %30 4B in %0 samples=136: addr = 4*x*arg2+1*arg0 + (-4)*c0
+  store store to %51 4B in %1 samples=1: addr = 1*arg1+4*x
+  pred at %30 sgt samples=136: lhs = 1*arg2 + (1)*c0
+stir: tensors=2 coords=1 accesses=2 guards=1 loops=1 round-trip=137/137 samples
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B written dims: d0[stride 4B]
+  load 4B arg0[1*x*arg2 - c0] at %30
+  store 4B arg1[1*x] at store to %51
+  guard sgt lhs = 1*arg2 + (1)*c0
+  loop %25 depth=1 traversal: inductionx1 sumx1 -> permits: partition reorder tree-combine
+gemv(__nv_bfloat16 const*, float const*, float*, int, int): sig: T=64 threads-run=32 loops=1 (traversal 1, generic 0, bounded 0, refused 0) device-stores=33 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %61 depth=1 kind=traversal data-phis=1
+    phi %62 : induction terms=1
+    phi %63 : sum terms=2 init=identity
+    phi %64 : induction terms=1
+    algebra: inductionx2 sumx1 -> permits: partition reorder tree-combine
+coords: d=3 (output 1, reduction/traversal 2) axes=3 (sg/lane, loop levels 1; derived 0 in φ) sites fitted=47 data-dependent=0 non-affine=1
+  c0 (o) = 32*sg + lane
+  c1 (r) = sg
+  c2 (r) = i0
+  load %67 2B in %0 piece 0 (of 4) samples=1: addr = 1*arg0+128*x*arg4
+  load %67 2B in %0 piece 0 (of 4) samples=1: addr = 16+1*arg0+128*x*arg4
+  load %67 2B in %0 piece 0 (of 4) samples=1: addr = 32+1*arg0+128*x*arg4
+  load %67 2B in %0 piece 0 (of 4) samples=129: addr = 48+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %70 16B in %1 samples=4: addr = 1*arg1 + (32)*c2
+  load %77 2B in %0 piece 0 (of 4) samples=1: addr = 18+1*arg0+128*x*arg4
+  load %77 2B in %0 piece 0 (of 4) samples=1: addr = 2+1*arg0+128*x*arg4
+  load %77 2B in %0 piece 0 (of 4) samples=1: addr = 34+1*arg0+128*x*arg4
+  load %77 2B in %0 piece 0 (of 4) samples=129: addr = 50+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %82 2B in %0 piece 0 (of 4) samples=1: addr = 20+1*arg0+128*x*arg4
+  load %82 2B in %0 piece 0 (of 4) samples=1: addr = 36+1*arg0+128*x*arg4
+  load %82 2B in %0 piece 0 (of 4) samples=1: addr = 4+1*arg0+128*x*arg4
+  load %82 2B in %0 piece 0 (of 4) samples=129: addr = 52+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %87 2B in %0 piece 0 (of 4) samples=1: addr = 22+1*arg0+128*x*arg4
+  load %87 2B in %0 piece 0 (of 4) samples=1: addr = 38+1*arg0+128*x*arg4
+  load %87 2B in %0 piece 0 (of 4) samples=129: addr = 54+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %87 2B in %0 piece 0 (of 4) samples=1: addr = 6+1*arg0+128*x*arg4
+  load %95 2B in %0 piece 0 (of 4) samples=1: addr = 24+1*arg0+128*x*arg4
+  load %95 2B in %0 piece 0 (of 4) samples=1: addr = 40+1*arg0+128*x*arg4
+  load %95 2B in %0 piece 0 (of 4) samples=129: addr = 56+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %95 2B in %0 piece 0 (of 4) samples=1: addr = 8+1*arg0+128*x*arg4
+  load %98 16B in %1 samples=4: addr = 16+1*arg1 + (32)*c2
+  load %105 2B in %0 piece 0 (of 4) samples=1: addr = 10+1*arg0+128*x*arg4
+  load %105 2B in %0 piece 0 (of 4) samples=1: addr = 26+1*arg0+128*x*arg4
+  load %105 2B in %0 piece 0 (of 4) samples=1: addr = 42+1*arg0+128*x*arg4
+  load %105 2B in %0 piece 0 (of 4) samples=129: addr = 58+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %110 2B in %0 piece 0 (of 4) samples=1: addr = 12+1*arg0+128*x*arg4
+  load %110 2B in %0 piece 0 (of 4) samples=1: addr = 28+1*arg0+128*x*arg4
+  load %110 2B in %0 piece 0 (of 4) samples=1: addr = 44+1*arg0+128*x*arg4
+  load %110 2B in %0 piece 0 (of 4) samples=129: addr = 60+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %115 2B in %0 piece 0 (of 4) samples=1: addr = 14+1*arg0+128*x*arg4
+  load %115 2B in %0 piece 0 (of 4) samples=1: addr = 30+1*arg0+128*x*arg4
+  load %115 2B in %0 piece 0 (of 4) samples=1: addr = 46+1*arg0+128*x*arg4
+  load %115 2B in %0 piece 0 (of 4) samples=129: addr = 62+1*arg0+128*x*arg4 + (2*arg4)*c0
+  load %33 2B in %0 samples=33: addr = 1*arg0+128*x*arg4+2*zext(ite(eq(...,...),0,32),) + (2*arg4)*c0
+  load %36 16B in %1 samples=1: addr = 1*arg1+4*zext(ite(eq(...,...),0,32),)
+  load %43 2B in %0 samples=33: addr = 2+1*arg0+128*x*arg4+2*zext(ite(eq(...,...),0,32),) + (2*arg4)*c0
+  load %48 2B in %0 samples=33: addr = 4+1*arg0+128*x*arg4+2*zext(ite(eq(...,...),0,32),) + (2*arg4)*c0
+  load %53 2B in %0 samples=33: addr = 6+1*arg0+128*x*arg4+2*zext(ite(eq(...,...),0,32),) + (2*arg4)*c0
+  store store to %60 4B in %2 samples=33: addr = 1*arg2+256*x + (4)*c0
+  pred at %67 slt samples=132: lhs = 64*x+-1*arg3 + (1)*c0
+  pred at %67 sgt samples=132: lhs = 1*arg4
+  pred at %67 ne samples=132: lhs = 1*lshr(-1+1*arg4,2,)
+  pred at %67 ne (one of 4 families) samples=6: lhs = 2+-1*and(1+1*lshr(...,...,),2147483646,) + (6)*c1
+  pred at %67 ne (one of 4 families) samples=2: lhs = 4+-1*and(1+1*lshr(...,...,),2147483646,)
+  pred at %67 ne (one of 4 families) samples=1: lhs = 6+-1*and(1+1*lshr(...,...,),2147483646,)
+  pred at %67 ne (one of 4 families) samples=93: lhs = 8+-1*and(1+1*lshr(...,...,),2147483646,)
+  pred at %33 eq samples=32: under-sampled along sg
+stir: tensors=3 coords=3 accesses=40 guards=7 loops=1 round-trip=1230/1230 samples
+  tensor arg0 elem=2B read dims: d0[stride 2*arg4B] d1[stride 2B]
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 2B arg0[64*x][0] piece 0/4 at %67
+  load 2B arg0[64*x][8] piece 0/4 at %67
+  load 2B arg0[64*x][16] piece 0/4 at %67
+  load 2B arg0[64*x + c0][24] piece 0/4 at %67
+  load 2B arg0[64*x][9] piece 0/4 at %77
+  load 2B arg0[64*x][1] piece 0/4 at %77
+  load 2B arg0[64*x][17] piece 0/4 at %77
+  load 2B arg0[64*x + c0][25] piece 0/4 at %77
+  load 2B arg0[64*x][10] piece 0/4 at %82
+  load 2B arg0[64*x][18] piece 0/4 at %82
+  load 2B arg0[64*x][2] piece 0/4 at %82
+  load 2B arg0[64*x + c0][26] piece 0/4 at %82
+  load 2B arg0[64*x][11] piece 0/4 at %87
+  load 2B arg0[64*x][19] piece 0/4 at %87
+  load 2B arg0[64*x + c0][27] piece 0/4 at %87
+  load 2B arg0[64*x][3] piece 0/4 at %87
+  load 2B arg0[64*x][12] piece 0/4 at %95
+  load 2B arg0[64*x][20] piece 0/4 at %95
+  load 2B arg0[64*x + c0][28] piece 0/4 at %95
+  load 2B arg0[64*x][4] piece 0/4 at %95
+  load 2B arg0[64*x][5] piece 0/4 at %105
+  load 2B arg0[64*x][13] piece 0/4 at %105
+  load 2B arg0[64*x][21] piece 0/4 at %105
+  load 2B arg0[64*x + c0][29] piece 0/4 at %105
+  load 2B arg0[64*x][6] piece 0/4 at %110
+  load 2B arg0[64*x][14] piece 0/4 at %110
+  load 2B arg0[64*x][22] piece 0/4 at %110
+  load 2B arg0[64*x + c0][30] piece 0/4 at %110
+  load 2B arg0[64*x][7] piece 0/4 at %115
+  load 2B arg0[64*x][15] piece 0/4 at %115
+  load 2B arg0[64*x][23] piece 0/4 at %115
+  load 2B arg0[64*x + c0][31] piece 0/4 at %115
+  load 2B arg0[64*x + c0][1*zext(ite(eq(...,...),0,32),)] at %33
+  load 2B arg0[64*x + c0][1+1*zext(ite(eq(...,...),0,32),)] at %43
+  load 2B arg0[64*x + c0][2+1*zext(ite(eq(...,...),0,32),)] at %48
+  load 2B arg0[64*x + c0][3+1*zext(ite(eq(...,...),0,32),)] at %53
+  load 16B arg1[8*c2] at %70
+  load 16B arg1[4 + 8*c2] at %98
+  load 16B arg1[1*zext(ite(eq(...,...),0,32),)] at %36
+  store 4B arg2[64*x + c0] at store to %60
+  guard slt lhs = 64*x+-1*arg3 + (1)*c0
+  guard sgt lhs = 1*arg4
+  guard ne lhs = 1*lshr(-1+1*arg4,2,)
+  guard ne lhs = 2+-1*and(1+1*lshr(...,...,),2147483646,) + (6)*c1 (one of 4 families)
+  guard ne lhs = 4+-1*and(1+1*lshr(...,...,),2147483646,) (one of 4 families)
+  guard ne lhs = 6+-1*and(1+1*lshr(...,...,),2147483646,) (one of 4 families)
+  guard ne lhs = 8+-1*and(1+1*lshr(...,...,),2147483646,) (one of 4 families)
+  loop %61 depth=1 traversal: inductionx2 sumx1 -> permits: partition reorder tree-combine
+gather(float const*, int const*, float*, int): sig: T=128 threads-run=32 loops=1 (traversal 1, generic 0, bounded 0, refused 0) device-stores=136 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %19 depth=1 kind=traversal
+    phi %20 : induction terms=1
+    algebra: inductionx1
+coords: d=1 (output 1, reduction/traversal 0) axes=3 (sg/lane, loop levels 1; derived 0 in φ) sites fitted=4 data-dependent=0 non-affine=0
+  c0 (o) = 32*sg + lane + 128*i0
+  load %11 4B in %1 samples=1: addr = 1*arg1+4*x
+  load %23 4B in %0 through derived quantities samples=136: addr = 4*arg3*ld[1*arg1+4*x]+1*arg0 + (4)*c0
+  store store to %24 4B in %2 samples=136: addr = 4*arg3*x+1*arg2 + (4)*c0
+  pred at %11 sgt samples=136: lhs = 1*arg3 + (-1)*c0
+stir: tensors=3 coords=1 accesses=3 guards=1 loops=1 round-trip=273/273 samples
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 4B arg1[1*x] at %11
+  load 4B arg0[1*arg3*ld[1*arg1+4*x] + c0] (through derived quantities) at %23
+  store 4B arg2[1*arg3*x + c0] at store to %24
+  guard sgt lhs = 1*arg3 + (-1)*c0
+  loop %19 depth=1 traversal: inductionx1
+softmax_row(float const*, float*, int): sig: T=128 threads-run=32 loops=2 (traversal 2, generic 0, bounded 0, refused 0) device-stores=128 shared-writes=24 shared-reads=1536 barriers=1 tensor-calls=0
+  loop %64 depth=1 kind=traversal data-phis=2
+    phi %65 : max terms=1 init=identity
+    phi %66 : tuple [linear l' = a*l + b with a = exp(m_old - m_new): online softmax]
+    phi %67 : induction terms=1
+    algebra: inductionx1 maxx1 tuplex1 -> permits: partition reorder tree-combine online (max,sum,acc)
+  loop %127 depth=1 kind=traversal
+    phi %128 : induction terms=1
+    algebra: inductionx1
+coords: d=3 (output 1, reduction/traversal 2) axes=4 (sg/lane, loop levels 2; derived 0 in φ) sites fitted=6 data-dependent=0 non-affine=0
+  c0 (o) = lane + 32*i1
+  c1 (r) = -1*lane + -31*i1
+  c2 (r) = -1*sg + -1*lane + -4*i0 + -31*i1
+  load %70 4B in %0 samples=136: addr = 1*arg0+4*x*arg2 + (-124)*c0 + (-128)*c2
+  load %132 4B in %0 samples=128: addr = 1*arg0+4*x*arg2 + (4)*c0
+  store store to %136 4B in %1 samples=128: addr = 1*arg1+4*x*arg2 + (4)*c0
+  pred at %70 sgt (one of 2 families) samples=128: lhs = -384+1*arg2 + (31)*c0 + (32)*c1
+  pred at %70 sgt (one of 2 families) samples=136: lhs = 1*arg2 + (31)*c0 + (32)*c2
+  pred at %132 slt samples=128: lhs = -513+1*arg2 + (31)*c0 + (32)*c1
+stir: tensors=2 coords=3 accesses=3 guards=3 loops=2 round-trip=392/392 samples
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B written dims: d0[stride 4B]
+  load 4B arg0[1*x*arg2 - 31*c0 - 32*c2] at %70
+  load 4B arg0[1*x*arg2 + c0] at %132
+  store 4B arg1[1*x*arg2 + c0] at store to %136
+  guard sgt lhs = -384+1*arg2 + (31)*c0 + (32)*c1 (one of 2 families)
+  guard sgt lhs = 1*arg2 + (31)*c0 + (32)*c2 (one of 2 families)
+  guard slt lhs = -513+1*arg2 + (31)*c0 + (32)*c1
+  loop %64 depth=1 traversal: inductionx1 maxx1 tuplex1 -> permits: partition reorder tree-combine
+  loop %127 depth=1 traversal: inductionx1
+rmsnorm(float const*, float const*, float*, int): sig: T=128 threads-run=32 loops=2 (traversal 2, generic 0, bounded 0, refused 0) device-stores=136 shared-writes=16 shared-reads=152 barriers=2 tensor-calls=0
+  loop %26 depth=1 kind=traversal data-phis=1
+    phi %27 : sum terms=1 init=identity
+    phi %28 : induction terms=1
+    algebra: inductionx1 sumx1 -> permits: partition reorder tree-combine
+  loop %63 depth=1 kind=traversal
+    phi %64 : induction terms=1
+    algebra: inductionx1
+coords: d=3 (output 1, reduction/traversal 2) axes=4 (sg/lane, loop levels 2; derived 0 in φ) sites fitted=7 data-dependent=0 non-affine=0
+  c0 (o) = 32*sg + lane + 128*i1
+  c1 (r) = -32*sg + -1*lane + -127*i1
+  c2 (r) = -32*sg + -1*lane + -1*i0 + -127*i1
+  load %31 4B in %0 samples=136: addr = 1*arg0+4*x*arg3 + (-508)*c0 + (-512)*c2
+  load %68 4B in %0 samples=136: addr = 1*arg0+4*x*arg3 + (4)*c0
+  load %71 4B in %1 samples=136: addr = 1*arg1 + (4)*c0
+  store store to %73 4B in %2 samples=136: addr = 1*arg2+4*x*arg3 + (4)*c0
+  pred at %31 sgt (one of 2 families) samples=136: lhs = -384+1*arg3 + (127)*c0 + (128)*c1
+  pred at %31 sgt (one of 2 families) samples=136: lhs = 1*arg3 + (127)*c0 + (128)*c2
+  pred at %68 slt samples=136: lhs = -513+1*arg3 + (127)*c0 + (128)*c1
+stir: tensors=3 coords=3 accesses=4 guards=3 loops=2 round-trip=544/544 samples
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 4B arg0[1*x*arg3 - 127*c0 - 128*c2] at %31
+  load 4B arg0[1*x*arg3 + c0] at %68
+  load 4B arg1[c0] at %71
+  store 4B arg2[1*x*arg3 + c0] at store to %73
+  guard sgt lhs = -384+1*arg3 + (127)*c0 + (128)*c1 (one of 2 families)
+  guard sgt lhs = 1*arg3 + (127)*c0 + (128)*c2 (one of 2 families)
+  guard slt lhs = -513+1*arg3 + (127)*c0 + (128)*c1
+  loop %26 depth=1 traversal: inductionx1 sumx1 -> permits: partition reorder tree-combine
+  loop %63 depth=1 traversal: inductionx1
+rope(float const*, float const*, float const*, float*, int): sig: T=64 threads-run=32 loops=0 (traversal 0, generic 0, bounded 0, refused 0) device-stores=66 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+coords: d=1 (output 1, reduction/traversal 0) axes=2 (sg/lane, loop levels 0; derived 0 in φ) sites fitted=7 data-dependent=0 non-affine=0
+  c0 (o) = 32*sg + lane
+  load %17 4B in %0 samples=33: addr = 4*arg4*x+1*arg0 + (4)*c0
+  load %21 4B in %0 through derived quantities samples=33: addr = 4*arg4*x+4*ashr(1*arg4,1,)+1*arg0 + (4)*c0
+  load %23 4B in %1 samples=33: addr = 1*arg1 + (4)*c0
+  load %25 4B in %2 samples=33: addr = 1*arg2 + (4)*c0
+  store store to %29 4B in %3 samples=33: addr = 4*arg4*x+1*arg3 + (4)*c0
+  store store to %33 4B in %3 through derived quantities samples=33: addr = 4*arg4*x+4*ashr(1*arg4,1,)+1*arg3 + (4)*c0
+  pred at %17 sgt samples=33: lhs = 1*ashr(1*arg4,1,) + (-1)*c0
+stir: tensors=4 coords=1 accesses=6 guards=1 loops=0 round-trip=198/198 samples
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B read dims: d0[stride 4B]
+  tensor arg3 elem=4B written dims: d0[stride 4B]
+  load 4B arg0[1*arg4*x + c0] at %17
+  load 4B arg0[1*arg4*x+1*ashr(1*arg4,1,) + c0] (through derived quantities) at %21
+  load 4B arg1[c0] at %23
+  load 4B arg2[c0] at %25
+  store 4B arg3[1*arg4*x + c0] at store to %29
+  store 4B arg3[1*arg4*x+1*ashr(1*arg4,1,) + c0] (through derived quantities) at store to %33
+  guard sgt lhs = 1*ashr(1*arg4,1,) + (-1)*c0
+attn(float const*, float const*, float const*, float*, int, int): sig: T=32 threads-run=32 loops=3 (traversal 3, generic 0, bounded 0, refused 0) device-stores=32 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %26 depth=1 kind=traversal data-phis=3
+    phi %27 : max terms=1 init=identity
+    phi %28 : tuple [linear l' = a*l + b with a = exp(m_old - m_new): online softmax]
+    phi %29 : induction terms=1
+    phi %30 : tuple [linear l' = a*l + b with a = exp(m_old - m_new): online softmax]
+    algebra: inductionx1 maxx1 tuplex2 -> permits: partition reorder tree-combine online (max,sum,acc)
+  loop %75 depth=2 kind=traversal data-phis=1
+    phi %76 : induction terms=1
+    phi %77 : sum terms=8 init=identity
+    phi %78 : induction terms=1
+    phi %76 : induction terms=1
+    phi %77 : sum terms=8 init=identity
+    phi %78 : induction terms=1
+    phi %76 : induction terms=1
+    phi %77 : sum terms=8 init=identity
+    phi %78 : induction terms=1
+    phi %76 : induction terms=1
+    phi %77 : sum terms=8 init=identity
+    phi %78 : induction terms=1
+    algebra: inductionx8 sumx4 -> permits: partition reorder tree-combine
+  loop %45 depth=2 kind=traversal data-phis=1
+    phi %46 : induction terms=1
+    phi %47 : sum terms=1 init=non-identity
+    phi %48 : induction terms=1
+    phi %46 : induction terms=1
+    phi %47 : sum terms=1 init=non-identity
+    phi %48 : induction terms=1
+    phi %46 : induction terms=1
+    phi %47 : sum terms=1 init=non-identity
+    phi %48 : induction terms=1
+    phi %46 : induction terms=1
+    phi %47 : sum terms=1 init=non-identity
+    phi %48 : induction terms=1
+    algebra: inductionx8 sumx4 -> permits: partition reorder tree-combine
+coords: d=4 (output 1, reduction/traversal 3) axes=5 (sg/lane, loop levels 3; derived 0 in φ) sites fitted=23 data-dependent=0 non-affine=0 replication=sg
+  c0 (o) = lane
+  c1 (r) = i1
+  c2 (r) = i0
+  c3 (r) = i2
+  load %81 16B in %0 samples=16: addr = 1*arg0 + (32)*c1
+  load %87 16B in %1 samples=16: addr = 1*arg1 + (32)*c1 + (4*arg5)*c2
+  load %103 16B in %0 samples=16: addr = 16+1*arg0 + (32)*c1
+  load %109 16B in %1 samples=16: addr = 16+1*arg1 + (32)*c1 + (4*arg5)*c2
+  load %51 4B in %0 through derived quantities piece 0 (of 2) samples=12: addr = 1*arg0+4*ite(-1*ult(...,...),0,32) + (4)*c3
+  load %51 4B in %0 through derived quantities piece 0 (of 2) samples=4: addr = 1*arg0+4*zext(ite(ult(...,...),0,32),)
+  load %53 4B in %1 through derived quantities piece 0 (of 2) samples=12: addr = 1*arg1+4*ite(-1*ult(...,...),0,32) + (4*arg5)*c2 + (4)*c3
+  load %53 4B in %1 through derived quantities piece 0 (of 2) samples=4: addr = 1*arg1+4*zext(ite(ult(...,...),0,32),) + (4*arg5)*c2
+  load %68 4B in %2 piece 0 (of 4) samples=125: addr = 1*arg2+128*x+12*arg5 + (4)*c0
+  load %68 4B in %2 piece 0 (of 4) samples=1: addr = 1*arg2+128*x+4*arg5
+  load %68 4B in %2 piece 0 (of 4) samples=1: addr = 1*arg2+128*x+8*arg5
+  load %68 4B in %2 piece 0 (of 4) samples=1: addr = 1*arg2+128*x
+  store store to %40 4B in %3 samples=32: addr = 1*arg3+128*x + (4)*c0
+  pred at %81 slt samples=128: lhs = 32*x+-1*arg5 + (1)*c0
+  pred at %81 sgt samples=128: lhs = 1*arg4
+  pred at %81 sgt samples=4: lhs = 1*arg5
+  pred at %81 uge samples=4: lhs = -8+1*arg5
+  pred at %81 ne (one of 3 families) samples=2: lhs = 16+-1*and(1*arg5,2147483640,)
+  pred at %81 ne (one of 3 families) samples=1: lhs = 24+-1*and(1*arg5,2147483640,)
+  pred at %81 ne (one of 3 families) samples=3: lhs = 8+-1*and(1*arg5,2147483640,)
+  pred at %68 slt samples=124: lhs = -1+1*arg5
+  pred at %68 ne samples=93: lhs = 4+-1*arg4
+  pred at store to %40 slt samples=31: lhs = -1+1*arg4
+stir: tensors=4 coords=4 accesses=13 guards=10 loops=3 round-trip=256/256 samples
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B read dims: d0[stride 4*arg5B] d1[stride 4B]
+  tensor arg2 elem=4B read dims: d0[stride 4B]
+  tensor arg3 elem=4B written dims: d0[stride 4B]
+  load 16B arg0[8*c1] at %81
+  load 16B arg0[4 + 8*c1] at %103
+  load 4B arg0[1*ite(-1*ult(...,...),0,32) + c3] (through derived quantities) piece 0/2 at %51
+  load 4B arg0[1*zext(ite(ult(...,...),0,32),)] (through derived quantities) piece 0/2 at %51
+  load 16B arg1[c2][8*c1] at %87
+  load 16B arg1[c2][4 + 8*c1] at %109
+  load 4B arg1[c2][1*ite(-1*ult(...,...),0,32) + c3] (through derived quantities) piece 0/2 at %53
+  load 4B arg1[c2][1*zext(ite(ult(...,...),0,32),)] (through derived quantities) piece 0/2 at %53
+  load 4B arg2[32*x+3*arg5 + c0] piece 0/4 at %68
+  load 4B arg2[32*x+1*arg5] piece 0/4 at %68
+  load 4B arg2[32*x+2*arg5] piece 0/4 at %68
+  load 4B arg2[32*x] piece 0/4 at %68
+  store 4B arg3[32*x + c0] at store to %40
+  guard slt lhs = 32*x+-1*arg5 + (1)*c0
+  guard sgt lhs = 1*arg4
+  guard sgt lhs = 1*arg5
+  guard uge lhs = -8+1*arg5
+  guard ne lhs = 16+-1*and(1*arg5,2147483640,) (one of 3 families)
+  guard ne lhs = 24+-1*and(1*arg5,2147483640,) (one of 3 families)
+  guard ne lhs = 8+-1*and(1*arg5,2147483640,) (one of 3 families)
+  guard slt lhs = -1+1*arg5
+  guard ne lhs = 4+-1*arg4
+  guard slt lhs = -1+1*arg4
+  loop %26 depth=1 traversal: inductionx1 maxx1 tuplex2 -> permits: partition reorder tree-combine
+  loop %75 depth=2 traversal: inductionx8 sumx4 -> permits: partition reorder tree-combine
+  loop %45 depth=2 traversal: inductionx8 sumx4 -> permits: partition reorder tree-combine
+hgemm16(__half const*, __half const*, float*): sig: T=32 threads-run=32 loops=2 (traversal 1, generic 0, bounded 1, refused 0) device-stores=128 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %7 depth=1 kind=traversal
+    phi %8 : induction terms=1
+    algebra: inductionx1
+  loop %16 depth=2 kind=bounded(8)
+coords: d=2 (output 1, reduction/traversal 1) axes=3 (sg/lane, loop levels 1; derived 0 in φ) sites fitted=73 data-dependent=0 non-affine=0 replication=sg
+  c0 (o) = lane + 32*i0
+  c1 (r) = i0
+  load %22 2B in %0 piece 0 (of 9) samples=64: addr = 1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=4: addr = 16+1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=4: addr = 24+1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=4: addr = 32+1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=4: addr = 40+1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=4: addr = 48+1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=4: addr = 56+1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=64: addr = 64+1*arg0 + (128)*c1
+  load %22 2B in %0 piece 0 (of 9) samples=4: addr = 8+1*arg0 + (128)*c1
+  load %28 2B in %1 piece 0 (of 9) samples=4: addr = 1*arg1
+  load %28 2B in %1 piece 0 (of 9) samples=4: addr = 128+1*arg1
+  load %28 2B in %1 piece 0 (of 9) samples=4: addr = 256+1*arg1
+  load %28 2B in %1 piece 0 (of 9) samples=4: addr = 384+1*arg1
+  load %28 2B in %1 piece 0 (of 9) samples=4: addr = 512+1*arg1
+  load %28 2B in %1 piece 0 (of 9) samples=4: addr = 640+1*arg1
+  load %28 2B in %1 piece 0 (of 9) samples=4: addr = 768+1*arg1
+  load %28 2B in %1 piece 0 (of 9) samples=64: addr = 864+1*arg1 + (2)*c0 + (-64)*c1
+  load %28 2B in %1 piece 0 (of 9) samples=64: addr = 896+1*arg1 + (2)*c0 + (-64)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=4: addr = 10+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=64: addr = 122+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=4: addr = 18+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=4: addr = 2+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=4: addr = 26+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=4: addr = 34+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=4: addr = 42+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=4: addr = 50+1*arg0 + (128)*c1
+  load %36 2B in %0 piece 0 (of 9) samples=64: addr = 58+1*arg0 + (128)*c1
+  load %42 2B in %1 piece 0 (of 9) samples=4: addr = 160+1*arg1
+  load %42 2B in %1 piece 0 (of 9) samples=4: addr = 288+1*arg1
+  load %42 2B in %1 piece 0 (of 9) samples=4: addr = 32+1*arg1
+  load %42 2B in %1 piece 0 (of 9) samples=4: addr = 416+1*arg1
+  load %42 2B in %1 piece 0 (of 9) samples=4: addr = 544+1*arg1
+  load %42 2B in %1 piece 0 (of 9) samples=4: addr = 672+1*arg1
+  load %42 2B in %1 piece 0 (of 9) samples=4: addr = 800+1*arg1
+  load %42 2B in %1 piece 0 (of 9) samples=64: addr = 896+1*arg1 + (2)*c0 + (-64)*c1
+  load %42 2B in %1 piece 0 (of 9) samples=64: addr = 928+1*arg1 + (2)*c0 + (-64)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=4: addr = 12+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=64: addr = 124+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=4: addr = 20+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=4: addr = 28+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=4: addr = 36+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=4: addr = 4+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=4: addr = 44+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=4: addr = 52+1*arg0 + (128)*c1
+  load %50 2B in %0 piece 0 (of 9) samples=64: addr = 60+1*arg0 + (128)*c1
+  load %56 2B in %1 piece 0 (of 9) samples=4: addr = 192+1*arg1
+  load %56 2B in %1 piece 0 (of 9) samples=4: addr = 320+1*arg1
+  load %56 2B in %1 piece 0 (of 9) samples=4: addr = 448+1*arg1
+  load %56 2B in %1 piece 0 (of 9) samples=4: addr = 576+1*arg1
+  load %56 2B in %1 piece 0 (of 9) samples=4: addr = 64+1*arg1
+  load %56 2B in %1 piece 0 (of 9) samples=4: addr = 704+1*arg1
+  load %56 2B in %1 piece 0 (of 9) samples=4: addr = 832+1*arg1
+  load %56 2B in %1 piece 0 (of 9) samples=64: addr = 928+1*arg1 + (2)*c0 + (-64)*c1
+  load %56 2B in %1 piece 0 (of 9) samples=64: addr = 960+1*arg1 + (2)*c0 + (-64)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=64: addr = 126+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=4: addr = 14+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=4: addr = 22+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=4: addr = 30+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=4: addr = 38+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=4: addr = 46+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=4: addr = 54+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=4: addr = 6+1*arg0 + (128)*c1
+  load %64 2B in %0 piece 0 (of 9) samples=64: addr = 62+1*arg0 + (128)*c1
+  load %70 2B in %1 piece 0 (of 9) samples=4: addr = 224+1*arg1
+  load %70 2B in %1 piece 0 (of 9) samples=4: addr = 352+1*arg1
+  load %70 2B in %1 piece 0 (of 9) samples=4: addr = 480+1*arg1
+  load %70 2B in %1 piece 0 (of 9) samples=4: addr = 608+1*arg1
+  load %70 2B in %1 piece 0 (of 9) samples=4: addr = 736+1*arg1
+  load %70 2B in %1 piece 0 (of 9) samples=4: addr = 864+1*arg1
+  load %70 2B in %1 piece 0 (of 9) samples=4: addr = 96+1*arg1
+  load %70 2B in %1 piece 0 (of 9) samples=64: addr = 960+1*arg1 + (2)*c0 + (-64)*c1
+  load %70 2B in %1 piece 0 (of 9) samples=64: addr = 992+1*arg1 + (2)*c0 + (-64)*c1
+  store store to %13 4B in %2 samples=128: addr = 1*arg2 + (4)*c0
+stir: tensors=3 coords=2 accesses=73 guards=0 loops=2 round-trip=1376/1376 samples
+  tensor arg0 elem=2B read dims: d0[stride 2B]
+  tensor arg1 elem=2B read dims: d0[stride 2B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 2B arg0[64*c1] piece 0/9 at %22
+  load 2B arg0[8 + 64*c1] piece 0/9 at %22
+  load 2B arg0[12 + 64*c1] piece 0/9 at %22
+  load 2B arg0[16 + 64*c1] piece 0/9 at %22
+  load 2B arg0[20 + 64*c1] piece 0/9 at %22
+  load 2B arg0[24 + 64*c1] piece 0/9 at %22
+  load 2B arg0[28 + 64*c1] piece 0/9 at %22
+  load 2B arg0[32 + 64*c1] piece 0/9 at %22
+  load 2B arg0[4 + 64*c1] piece 0/9 at %22
+  load 2B arg0[5 + 64*c1] piece 0/9 at %36
+  load 2B arg0[61 + 64*c1] piece 0/9 at %36
+  load 2B arg0[9 + 64*c1] piece 0/9 at %36
+  load 2B arg0[1 + 64*c1] piece 0/9 at %36
+  load 2B arg0[13 + 64*c1] piece 0/9 at %36
+  load 2B arg0[17 + 64*c1] piece 0/9 at %36
+  load 2B arg0[21 + 64*c1] piece 0/9 at %36
+  load 2B arg0[25 + 64*c1] piece 0/9 at %36
+  load 2B arg0[29 + 64*c1] piece 0/9 at %36
+  load 2B arg0[6 + 64*c1] piece 0/9 at %50
+  load 2B arg0[62 + 64*c1] piece 0/9 at %50
+  load 2B arg0[10 + 64*c1] piece 0/9 at %50
+  load 2B arg0[14 + 64*c1] piece 0/9 at %50
+  load 2B arg0[18 + 64*c1] piece 0/9 at %50
+  load 2B arg0[2 + 64*c1] piece 0/9 at %50
+  load 2B arg0[22 + 64*c1] piece 0/9 at %50
+  load 2B arg0[26 + 64*c1] piece 0/9 at %50
+  load 2B arg0[30 + 64*c1] piece 0/9 at %50
+  load 2B arg0[63 + 64*c1] piece 0/9 at %64
+  load 2B arg0[7 + 64*c1] piece 0/9 at %64
+  load 2B arg0[11 + 64*c1] piece 0/9 at %64
+  load 2B arg0[15 + 64*c1] piece 0/9 at %64
+  load 2B arg0[19 + 64*c1] piece 0/9 at %64
+  load 2B arg0[23 + 64*c1] piece 0/9 at %64
+  load 2B arg0[27 + 64*c1] piece 0/9 at %64
+  load 2B arg0[3 + 64*c1] piece 0/9 at %64
+  load 2B arg0[31 + 64*c1] piece 0/9 at %64
+  load 2B arg1[0] piece 0/9 at %28
+  load 2B arg1[64] piece 0/9 at %28
+  load 2B arg1[128] piece 0/9 at %28
+  load 2B arg1[192] piece 0/9 at %28
+  load 2B arg1[256] piece 0/9 at %28
+  load 2B arg1[320] piece 0/9 at %28
+  load 2B arg1[384] piece 0/9 at %28
+  load 2B arg1[432 + c0 - 32*c1] piece 0/9 at %28
+  load 2B arg1[448 + c0 - 32*c1] piece 0/9 at %28
+  load 2B arg1[80] piece 0/9 at %42
+  load 2B arg1[144] piece 0/9 at %42
+  load 2B arg1[16] piece 0/9 at %42
+  load 2B arg1[208] piece 0/9 at %42
+  load 2B arg1[272] piece 0/9 at %42
+  load 2B arg1[336] piece 0/9 at %42
+  load 2B arg1[400] piece 0/9 at %42
+  load 2B arg1[448 + c0 - 32*c1] piece 0/9 at %42
+  load 2B arg1[464 + c0 - 32*c1] piece 0/9 at %42
+  load 2B arg1[96] piece 0/9 at %56
+  load 2B arg1[160] piece 0/9 at %56
+  load 2B arg1[224] piece 0/9 at %56
+  load 2B arg1[288] piece 0/9 at %56
+  load 2B arg1[32] piece 0/9 at %56
+  load 2B arg1[352] piece 0/9 at %56
+  load 2B arg1[416] piece 0/9 at %56
+  load 2B arg1[464 + c0 - 32*c1] piece 0/9 at %56
+  load 2B arg1[480 + c0 - 32*c1] piece 0/9 at %56
+  load 2B arg1[112] piece 0/9 at %70
+  load 2B arg1[176] piece 0/9 at %70
+  load 2B arg1[240] piece 0/9 at %70
+  load 2B arg1[304] piece 0/9 at %70
+  load 2B arg1[368] piece 0/9 at %70
+  load 2B arg1[432] piece 0/9 at %70
+  load 2B arg1[48] piece 0/9 at %70
+  load 2B arg1[480 + c0 - 32*c1] piece 0/9 at %70
+  load 2B arg1[496 + c0 - 32*c1] piece 0/9 at %70
+  store 4B arg2[c0] at store to %13
+  loop %7 depth=1 traversal: inductionx1
+  loop %16 depth=2 bounded(8)
+hgemm16b(__half const*, __half const*, float const*, float*): sig: T=32 threads-run=32 loops=2 (traversal 1, generic 0, bounded 1, refused 0) device-stores=128 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %11 depth=1 kind=traversal
+    phi %12 : induction terms=1
+    algebra: inductionx1
+  loop %21 depth=2 kind=bounded(8)
+coords: d=2 (output 1, reduction/traversal 1) axes=3 (sg/lane, loop levels 1; derived 0 in φ) sites fitted=75 data-dependent=0 non-affine=0 replication=sg
+  c0 (o) = lane + 32*i0
+  c1 (r) = -1*i0
+  load %9 4B in %2 piece 0 (of 2) samples=16: addr = -64+1*arg2 + (4)*c0 + (128)*c1
+  load %9 4B in %2 piece 0 (of 2) samples=16: addr = 1*arg2 + (4)*c0 + (128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=64: addr = 1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=4: addr = 16+1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=4: addr = 24+1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=4: addr = 32+1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=4: addr = 40+1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=4: addr = 48+1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=4: addr = 56+1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=64: addr = 64+1*arg0 + (-128)*c1
+  load %27 2B in %0 piece 0 (of 9) samples=4: addr = 8+1*arg0 + (-128)*c1
+  load %33 2B in %1 piece 0 (of 9) samples=4: addr = 1*arg1
+  load %33 2B in %1 piece 0 (of 9) samples=4: addr = 128+1*arg1
+  load %33 2B in %1 piece 0 (of 9) samples=4: addr = 256+1*arg1
+  load %33 2B in %1 piece 0 (of 9) samples=4: addr = 384+1*arg1
+  load %33 2B in %1 piece 0 (of 9) samples=4: addr = 512+1*arg1
+  load %33 2B in %1 piece 0 (of 9) samples=4: addr = 640+1*arg1
+  load %33 2B in %1 piece 0 (of 9) samples=4: addr = 768+1*arg1
+  load %33 2B in %1 piece 0 (of 9) samples=64: addr = 864+1*arg1 + (2)*c0 + (64)*c1
+  load %33 2B in %1 piece 0 (of 9) samples=64: addr = 896+1*arg1 + (2)*c0 + (64)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=4: addr = 10+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=64: addr = 122+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=4: addr = 18+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=4: addr = 2+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=4: addr = 26+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=4: addr = 34+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=4: addr = 42+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=4: addr = 50+1*arg0 + (-128)*c1
+  load %41 2B in %0 piece 0 (of 9) samples=64: addr = 58+1*arg0 + (-128)*c1
+  load %47 2B in %1 piece 0 (of 9) samples=4: addr = 160+1*arg1
+  load %47 2B in %1 piece 0 (of 9) samples=4: addr = 288+1*arg1
+  load %47 2B in %1 piece 0 (of 9) samples=4: addr = 32+1*arg1
+  load %47 2B in %1 piece 0 (of 9) samples=4: addr = 416+1*arg1
+  load %47 2B in %1 piece 0 (of 9) samples=4: addr = 544+1*arg1
+  load %47 2B in %1 piece 0 (of 9) samples=4: addr = 672+1*arg1
+  load %47 2B in %1 piece 0 (of 9) samples=4: addr = 800+1*arg1
+  load %47 2B in %1 piece 0 (of 9) samples=64: addr = 896+1*arg1 + (2)*c0 + (64)*c1
+  load %47 2B in %1 piece 0 (of 9) samples=64: addr = 928+1*arg1 + (2)*c0 + (64)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=4: addr = 12+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=64: addr = 124+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=4: addr = 20+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=4: addr = 28+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=4: addr = 36+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=4: addr = 4+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=4: addr = 44+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=4: addr = 52+1*arg0 + (-128)*c1
+  load %55 2B in %0 piece 0 (of 9) samples=64: addr = 60+1*arg0 + (-128)*c1
+  load %61 2B in %1 piece 0 (of 9) samples=4: addr = 192+1*arg1
+  load %61 2B in %1 piece 0 (of 9) samples=4: addr = 320+1*arg1
+  load %61 2B in %1 piece 0 (of 9) samples=4: addr = 448+1*arg1
+  load %61 2B in %1 piece 0 (of 9) samples=4: addr = 576+1*arg1
+  load %61 2B in %1 piece 0 (of 9) samples=4: addr = 64+1*arg1
+  load %61 2B in %1 piece 0 (of 9) samples=4: addr = 704+1*arg1
+  load %61 2B in %1 piece 0 (of 9) samples=4: addr = 832+1*arg1
+  load %61 2B in %1 piece 0 (of 9) samples=64: addr = 928+1*arg1 + (2)*c0 + (64)*c1
+  load %61 2B in %1 piece 0 (of 9) samples=64: addr = 960+1*arg1 + (2)*c0 + (64)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=64: addr = 126+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=4: addr = 14+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=4: addr = 22+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=4: addr = 30+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=4: addr = 38+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=4: addr = 46+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=4: addr = 54+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=4: addr = 6+1*arg0 + (-128)*c1
+  load %69 2B in %0 piece 0 (of 9) samples=64: addr = 62+1*arg0 + (-128)*c1
+  load %75 2B in %1 piece 0 (of 9) samples=4: addr = 224+1*arg1
+  load %75 2B in %1 piece 0 (of 9) samples=4: addr = 352+1*arg1
+  load %75 2B in %1 piece 0 (of 9) samples=4: addr = 480+1*arg1
+  load %75 2B in %1 piece 0 (of 9) samples=4: addr = 608+1*arg1
+  load %75 2B in %1 piece 0 (of 9) samples=4: addr = 736+1*arg1
+  load %75 2B in %1 piece 0 (of 9) samples=4: addr = 864+1*arg1
+  load %75 2B in %1 piece 0 (of 9) samples=4: addr = 96+1*arg1
+  load %75 2B in %1 piece 0 (of 9) samples=64: addr = 960+1*arg1 + (2)*c0 + (64)*c1
+  load %75 2B in %1 piece 0 (of 9) samples=64: addr = 992+1*arg1 + (2)*c0 + (64)*c1
+  store store to %18 4B in %3 samples=128: addr = 1*arg3 + (4)*c0
+stir: tensors=4 coords=2 accesses=75 guards=0 loops=2 round-trip=1408/1408 samples
+  tensor arg2 elem=4B read dims: d0[stride 4B]
+  tensor arg0 elem=2B read dims: d0[stride 2B]
+  tensor arg1 elem=2B read dims: d0[stride 2B]
+  tensor arg3 elem=4B written dims: d0[stride 4B]
+  load 4B arg2[-16 + c0 + 32*c1] piece 0/2 at %9
+  load 4B arg2[c0 + 32*c1] piece 0/2 at %9
+  load 2B arg0[-64*c1] piece 0/9 at %27
+  load 2B arg0[8 - 64*c1] piece 0/9 at %27
+  load 2B arg0[12 - 64*c1] piece 0/9 at %27
+  load 2B arg0[16 - 64*c1] piece 0/9 at %27
+  load 2B arg0[20 - 64*c1] piece 0/9 at %27
+  load 2B arg0[24 - 64*c1] piece 0/9 at %27
+  load 2B arg0[28 - 64*c1] piece 0/9 at %27
+  load 2B arg0[32 - 64*c1] piece 0/9 at %27
+  load 2B arg0[4 - 64*c1] piece 0/9 at %27
+  load 2B arg0[5 - 64*c1] piece 0/9 at %41
+  load 2B arg0[61 - 64*c1] piece 0/9 at %41
+  load 2B arg0[9 - 64*c1] piece 0/9 at %41
+  load 2B arg0[1 - 64*c1] piece 0/9 at %41
+  load 2B arg0[13 - 64*c1] piece 0/9 at %41
+  load 2B arg0[17 - 64*c1] piece 0/9 at %41
+  load 2B arg0[21 - 64*c1] piece 0/9 at %41
+  load 2B arg0[25 - 64*c1] piece 0/9 at %41
+  load 2B arg0[29 - 64*c1] piece 0/9 at %41
+  load 2B arg0[6 - 64*c1] piece 0/9 at %55
+  load 2B arg0[62 - 64*c1] piece 0/9 at %55
+  load 2B arg0[10 - 64*c1] piece 0/9 at %55
+  load 2B arg0[14 - 64*c1] piece 0/9 at %55
+  load 2B arg0[18 - 64*c1] piece 0/9 at %55
+  load 2B arg0[2 - 64*c1] piece 0/9 at %55
+  load 2B arg0[22 - 64*c1] piece 0/9 at %55
+  load 2B arg0[26 - 64*c1] piece 0/9 at %55
+  load 2B arg0[30 - 64*c1] piece 0/9 at %55
+  load 2B arg0[63 - 64*c1] piece 0/9 at %69
+  load 2B arg0[7 - 64*c1] piece 0/9 at %69
+  load 2B arg0[11 - 64*c1] piece 0/9 at %69
+  load 2B arg0[15 - 64*c1] piece 0/9 at %69
+  load 2B arg0[19 - 64*c1] piece 0/9 at %69
+  load 2B arg0[23 - 64*c1] piece 0/9 at %69
+  load 2B arg0[27 - 64*c1] piece 0/9 at %69
+  load 2B arg0[3 - 64*c1] piece 0/9 at %69
+  load 2B arg0[31 - 64*c1] piece 0/9 at %69
+  load 2B arg1[0] piece 0/9 at %33
+  load 2B arg1[64] piece 0/9 at %33
+  load 2B arg1[128] piece 0/9 at %33
+  load 2B arg1[192] piece 0/9 at %33
+  load 2B arg1[256] piece 0/9 at %33
+  load 2B arg1[320] piece 0/9 at %33
+  load 2B arg1[384] piece 0/9 at %33
+  load 2B arg1[432 + c0 + 32*c1] piece 0/9 at %33
+  load 2B arg1[448 + c0 + 32*c1] piece 0/9 at %33
+  load 2B arg1[80] piece 0/9 at %47
+  load 2B arg1[144] piece 0/9 at %47
+  load 2B arg1[16] piece 0/9 at %47
+  load 2B arg1[208] piece 0/9 at %47
+  load 2B arg1[272] piece 0/9 at %47
+  load 2B arg1[336] piece 0/9 at %47
+  load 2B arg1[400] piece 0/9 at %47
+  load 2B arg1[448 + c0 + 32*c1] piece 0/9 at %47
+  load 2B arg1[464 + c0 + 32*c1] piece 0/9 at %47
+  load 2B arg1[96] piece 0/9 at %61
+  load 2B arg1[160] piece 0/9 at %61
+  load 2B arg1[224] piece 0/9 at %61
+  load 2B arg1[288] piece 0/9 at %61
+  load 2B arg1[32] piece 0/9 at %61
+  load 2B arg1[352] piece 0/9 at %61
+  load 2B arg1[416] piece 0/9 at %61
+  load 2B arg1[464 + c0 + 32*c1] piece 0/9 at %61
+  load 2B arg1[480 + c0 + 32*c1] piece 0/9 at %61
+  load 2B arg1[112] piece 0/9 at %75
+  load 2B arg1[176] piece 0/9 at %75
+  load 2B arg1[240] piece 0/9 at %75
+  load 2B arg1[304] piece 0/9 at %75
+  load 2B arg1[368] piece 0/9 at %75
+  load 2B arg1[432] piece 0/9 at %75
+  load 2B arg1[48] piece 0/9 at %75
+  load 2B arg1[480 + c0 + 32*c1] piece 0/9 at %75
+  load 2B arg1[496 + c0 + 32*c1] piece 0/9 at %75
+  store 4B arg3[c0] at store to %18
+  loop %11 depth=1 traversal: inductionx1
+  loop %21 depth=2 bounded(8)
+sgemm(float const*, float const*, float*, int, int, int): sig: T=64 threads-run=32 loops=2 (traversal 2, generic 0, bounded 0, refused 0) device-stores=33 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %55 depth=1 kind=traversal data-phis=1
+    phi %56 : induction terms=1
+    phi %57 : sum terms=4 init=identity
+    phi %58 : induction terms=1
+    algebra: inductionx2 sumx1 -> permits: partition reorder tree-combine
+  loop %36 depth=1 kind=traversal data-phis=1
+    phi %37 : induction terms=1
+    phi %38 : sum terms=1 init=non-identity
+    phi %39 : induction terms=1
+    algebra: inductionx2 sumx1 -> permits: partition reorder tree-combine
+coords: d=2 (output 1, reduction/traversal 1) axes=4 (sg/lane, loop levels 2; derived 2 in φ) sites fitted=40 data-dependent=0 non-affine=12 replication=i0,i1
+  c0 (o) = 32*sg + lane
+  c1 (r) = sg
+  d0 = and(1*arg5,0,)   [operands' constant terms are the maps below]
+  d1 = sdiv(64*x,1*arg4,)   [operands' constant terms are the maps below]
+  load %61 16B in %0 through derived quantities piece 0 (of 5) samples=1: addr = 16+1*arg0+4*arg5*sdiv(64*x,1*arg4,)
+  load %61 16B in %0 through derived quantities piece 0 (of 5) samples=1: addr = 32+1*arg0+4*arg5*sdiv(64*x,1*arg4,)
+  load %61 16B in %0 through derived quantities piece 0 (of 5) samples=1: addr = 48+1*arg0+4*arg5*sdiv(64*x,1*arg4,)
+  load %61 16B in %0 through derived quantities piece 0 (of 5) samples=124: addr = 48+1*arg0 + (4*arg5)*d1
+  load %61 16B through derived quantities piece 0 (of 5) samples=5: the stride along d1 differs between samples (0 vs 4*arg5)
+  load %68 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+16*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %68 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+32*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %68 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+48*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %68 4B in %1 through derived quantities piece 0 (of 5) samples=124: addr = 1*arg1+256*x+48*arg4 + (4)*c0 + (-128)*c1 + (-4*arg4)*d1
+  load %68 4B through derived quantities piece 0 (of 5) samples=5: the stride along d1 differs between samples (0 vs -4*arg4)
+  load %75 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+20*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %75 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+36*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %75 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+52*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %75 4B in %1 through derived quantities piece 0 (of 5) samples=124: addr = 1*arg1+256*x+52*arg4 + (4)*c0 + (-128)*c1 + (-4*arg4)*d1
+  load %75 4B through derived quantities piece 0 (of 5) samples=5: the stride along d1 differs between samples (0 vs -4*arg4)
+  load %82 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+24*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %82 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+40*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %82 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+56*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %82 4B in %1 through derived quantities piece 0 (of 5) samples=124: addr = 1*arg1+256*x+56*arg4 + (4)*c0 + (-128)*c1 + (-4*arg4)*d1
+  load %82 4B through derived quantities piece 0 (of 5) samples=5: the stride along d1 differs between samples (0 vs -4*arg4)
+  load %89 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+28*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %89 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+44*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %89 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+60*arg4+-4*arg4*sdiv(64*x,1*arg4,)
+  load %89 4B in %1 through derived quantities piece 0 (of 5) samples=124: addr = 1*arg1+256*x+60*arg4 + (4)*c0 + (-128)*c1 + (-4*arg4)*d1
+  load %89 4B through derived quantities piece 0 (of 5) samples=5: the stride along d1 differs between samples (0 vs -4*arg4)
+  load %42 4B in %0 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg0+4*arg5*sdiv(64*x,1*arg4,)+4*zext(ite(ult(...,...),0,16),)
+  load %42 4B in %0 through derived quantities piece 0 (of 5) samples=124: addr = 12+1*arg0+4*ite(-1*ult(...,...),0,16) + (4*arg5)*d1
+  load %42 4B in %0 through derived quantities piece 0 (of 5) samples=1: addr = 4+1*arg0+4*arg5*sdiv(64*x,1*arg4,)+4*ite(-1*ult(...,...),0,16)
+  load %42 4B in %0 through derived quantities piece 0 (of 5) samples=1: addr = 8+1*arg0+4*arg5*sdiv(64*x,1*arg4,)+4*ite(-1*ult(...,...),0,16)
+  load %42 4B through derived quantities piece 0 (of 5) samples=5: the stride along d1 differs between samples (0 vs 4*arg5)
+  load %45 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+-4*arg4*sdiv(64*x,1*arg4,)+4*arg4*zext(ite(ult(...,...),0,16),)
+  load %45 4B in %1 through derived quantities piece 0 (of 5) samples=124: addr = 1*arg1+256*x+12*arg4+4*arg4*ite(-1*ult(...,...),0,16) + (4)*c0 + (-128)*c1 + (-4*arg4)*d1
+  load %45 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+4*arg4+-4*arg4*sdiv(64*x,1*arg4,)+4*arg4*ite(-1*ult(...,...),0,16)
+  load %45 4B in %1 through derived quantities piece 0 (of 5) samples=1: addr = 1*arg1+256*x+8*arg4+-4*arg4*sdiv(64*x,1*arg4,)+4*arg4*ite(-1*ult(...,...),0,16)
+  load %45 4B through derived quantities piece 0 (of 5) samples=5: the stride along d1 differs between samples (0 vs -4*arg4)
+  store store to %54 4B in %2 samples=33: addr = 1*arg2+256*x + (4)*c0
+  pred at %61 slt samples=228: lhs = 64*x+-1*arg4*arg3 + (1)*c0
+  pred at %61 sgt samples=228: lhs = 1*arg5
+  pred at %61 uge samples=132: lhs = -4+1*arg5
+  pred at %61 ne (one of 4 families) samples=1: lhs = 12 + (-1)*d0
+  pred at %61 ne (one of 4 families) samples=93: lhs = 16 + (-1)*d0
+  pred at %61 ne (one of 4 families) samples=6: lhs = 4 + (12)*c1 + (-1)*d0
+  pred at %61 ne (one of 4 families) samples=2: lhs = 8 + (-1)*d0
+  pred at %42 ult samples=128: under-sampled along sg
+  pred at %42 ne samples=96: under-sampled along sg
+  pred at store to %54 slt samples=32: under-sampled along sg
+  d0 operand 0 samples=195: value = 1*arg5
+  d0 operand 1 (one of 2 families) samples=99: value = 2147483644
+  d0 operand 1 (one of 2 families) samples=96: under-sampled along sg
+  d1 operand 0 (one of 2 families) samples=7: value = 32+64*x
+  d1 operand 0 (one of 2 families) samples=217: value = 64*x + (1)*c0 + (-32)*c1
+  d1 operand 1 samples=224: under-sampled along sg
+stir: tensors=3 coords=2 accesses=29 guards=7 loops=2 round-trip=922/922 samples unfitted-sites=7
+  unfitted load 16B at %61: the stride along d1 differs between samples (0 vs 4*arg5)
+  unfitted load 4B at %68: the stride along d1 differs between samples (0 vs -4*arg4)
+  unfitted load 4B at %75: the stride along d1 differs between samples (0 vs -4*arg4)
+  unfitted load 4B at %82: the stride along d1 differs between samples (0 vs -4*arg4)
+  unfitted load 4B at %89: the stride along d1 differs between samples (0 vs -4*arg4)
+  unfitted load 4B at %42: the stride along d1 differs between samples (0 vs 4*arg5)
+  unfitted load 4B at %45: the stride along d1 differs between samples (0 vs -4*arg4)
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 16B arg0[4+1*arg5*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %61
+  load 16B arg0[8+1*arg5*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %61
+  load 16B arg0[12+1*arg5*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %61
+  load 16B arg0[12] (through derived quantities) piece 0/5 at %61
+  load 4B arg0[1*arg5*sdiv(64*x,1*arg4,)+1*zext(ite(ult(...,...),0,16),)] (through derived quantities) piece 0/5 at %42
+  load 4B arg0[3+1*ite(-1*ult(...,...),0,16)] (through derived quantities) piece 0/5 at %42
+  load 4B arg0[1+1*arg5*sdiv(64*x,1*arg4,)+1*ite(-1*ult(...,...),0,16)] (through derived quantities) piece 0/5 at %42
+  load 4B arg0[2+1*arg5*sdiv(64*x,1*arg4,)+1*ite(-1*ult(...,...),0,16)] (through derived quantities) piece 0/5 at %42
+  load 4B arg1[64*x+4*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %68
+  load 4B arg1[64*x+8*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %68
+  load 4B arg1[64*x+12*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %68
+  load 4B arg1[64*x+12*arg4 + c0 - 32*c1] (through derived quantities) piece 0/5 at %68
+  load 4B arg1[64*x+5*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %75
+  load 4B arg1[64*x+9*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %75
+  load 4B arg1[64*x+13*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %75
+  load 4B arg1[64*x+13*arg4 + c0 - 32*c1] (through derived quantities) piece 0/5 at %75
+  load 4B arg1[64*x+6*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %82
+  load 4B arg1[64*x+10*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %82
+  load 4B arg1[64*x+14*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %82
+  load 4B arg1[64*x+14*arg4 + c0 - 32*c1] (through derived quantities) piece 0/5 at %82
+  load 4B arg1[64*x+7*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %89
+  load 4B arg1[64*x+11*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %89
+  load 4B arg1[64*x+15*arg4+-1*arg4*sdiv(64*x,1*arg4,)] (through derived quantities) piece 0/5 at %89
+  load 4B arg1[64*x+15*arg4 + c0 - 32*c1] (through derived quantities) piece 0/5 at %89
+  load 4B arg1[64*x+-1*arg4*sdiv(64*x,1*arg4,)+1*arg4*zext(ite(ult(...,...),0,16),)] (through derived quantities) piece 0/5 at %45
+  load 4B arg1[64*x+3*arg4+1*arg4*ite(-1*ult(...,...),0,16) + c0 - 32*c1] (through derived quantities) piece 0/5 at %45
+  load 4B arg1[64*x+1*arg4+-1*arg4*sdiv(64*x,1*arg4,)+1*arg4*ite(-1*ult(...,...),0,16)] (through derived quantities) piece 0/5 at %45
+  load 4B arg1[64*x+2*arg4+-1*arg4*sdiv(64*x,1*arg4,)+1*arg4*ite(-1*ult(...,...),0,16)] (through derived quantities) piece 0/5 at %45
+  store 4B arg2[64*x + c0] at store to %54
+  guard slt lhs = 64*x+-1*arg4*arg3 + (1)*c0
+  guard sgt lhs = 1*arg5
+  guard uge lhs = -4+1*arg5
+  guard ne lhs = 12 (one of 4 families)
+  guard ne lhs = 16 (one of 4 families)
+  guard ne lhs = 4 + (12)*c1 (one of 4 families)
+  guard ne lhs = 8 (one of 4 families)
+  derived d0 = and(1*arg5,0,); the integer operands' constant terms are the operand maps
+  derived d1 = sdiv(64*x,1*arg4,); the integer operands' constant terms are the operand maps
+    d0 operand 0 = 1*arg5
+    d0 operand 1 = 2147483644 (one of 2 families)
+    d1 operand 0 = 32+64*x (one of 2 families)
+    d1 operand 0 = 64*x + (1)*c0 + (-32)*c1 (one of 2 families)
+  loop %55 depth=1 traversal: inductionx2 sumx1 -> permits: partition reorder tree-combine
+  loop %36 depth=1 traversal: inductionx2 sumx1 -> permits: partition reorder tree-combine
+gdn(float const*, float const*, float*, int, int): sig: T=64 threads-run=32 loops=2 (traversal 2, generic 0, bounded 0, refused 0) device-stores=33 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %48 depth=1 kind=traversal data-phis=1
+    phi %49 : induction terms=1
+    phi %50 : tuple [reads a sibling phi: fadd(fmul(fadd(...,...,),bitcast(...,),),bitcast(ld[...],),)]
+    phi %51 : induction terms=1
+    algebra: inductionx2 tuplex1 -> permits: nothing (order-sensitive along this loop)
+  loop %29 depth=1 kind=traversal data-phis=1
+    phi %30 : induction terms=1
+    phi %31 : tuple [linear l' = a*l + b]
+    phi %32 : induction terms=1
+    algebra: inductionx2 tuplex1 -> permits: partition tree-combine
+coords: d=4 (output 1, reduction/traversal 3) axes=4 (sg/lane, loop levels 2; derived 1 in φ) sites fitted=33 data-dependent=0 non-affine=4
+  c0 (o) = 32*sg + lane
+  c1 (r) = sg
+  c2 (r) = i0
+  c3 (r) = i1
+  d0 = and(1*arg4,0,)   [operands' constant terms are the maps below]
+  load %54 16B in %0 samples=4: addr = 1*arg0 + (16)*c2
+  load %62 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+16*arg3
+  load %62 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+32*arg3
+  load %62 4B in %1 piece 0 (of 4) samples=129: addr = 1*arg1+256*x+48*arg3 + (4)*c0
+  load %62 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x
+  load %69 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+20*arg3
+  load %69 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+36*arg3
+  load %69 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+4*arg3
+  load %69 4B in %1 piece 0 (of 4) samples=129: addr = 1*arg1+256*x+52*arg3 + (4)*c0
+  load %76 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+24*arg3
+  load %76 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+40*arg3
+  load %76 4B in %1 piece 0 (of 4) samples=129: addr = 1*arg1+256*x+56*arg3 + (4)*c0
+  load %76 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+8*arg3
+  load %83 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+12*arg3
+  load %83 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+28*arg3
+  load %83 4B in %1 piece 0 (of 4) samples=1: addr = 1*arg1+256*x+44*arg3
+  load %83 4B in %1 piece 0 (of 4) samples=129: addr = 1*arg1+256*x+60*arg3 + (4)*c0
+  load %35 4B in %0 through derived quantities piece 0 (of 2) samples=3: addr = 1*arg0+4*ite(-1*ult(...,...),0,16) + (4)*c3
+  load %35 4B in %0 through derived quantities piece 0 (of 2) samples=1: addr = 1*arg0+4*zext(ite(ult(...,...),0,16),)
+  load %39 4B in %1 through derived quantities piece 0 (of 4) samples=129: addr = 1*arg1+256*x+12*arg3+4*arg3*ite(-1*ult(...,...),0,16) + (4)*c0
+  load %39 4B in %1 through derived quantities piece 0 (of 4) samples=1: addr = 1*arg1+256*x+4*arg3*zext(ite(ult(...,...),0,16),)
+  load %39 4B in %1 through derived quantities piece 0 (of 4) samples=1: addr = 1*arg1+256*x+4*arg3+4*arg3*ite(-1*ult(...,...),0,16)
+  load %39 4B in %1 through derived quantities piece 0 (of 4) samples=1: addr = 1*arg1+256*x+8*arg3+4*arg3*ite(-1*ult(...,...),0,16)
+  store store to %47 4B in %2 samples=33: addr = 1*arg2+256*x + (4)*c0
+  pred at %54 slt samples=228: lhs = 64*x+-1*arg3 + (1)*c0
+  pred at %54 sgt samples=228: lhs = 1*arg4
+  pred at %54 uge samples=132: lhs = -4+1*arg4
+  pred at %54 ne (one of 4 families) samples=1: lhs = 12 + (-1)*d0
+  pred at %54 ne (one of 4 families) samples=93: lhs = 16 + (-1)*d0
+  pred at %54 ne (one of 4 families) samples=6: lhs = 4 + (12)*c1 + (-1)*d0
+  pred at %54 ne (one of 4 families) samples=2: lhs = 8 + (-1)*d0
+  pred at %39 ult samples=128: under-sampled along sg
+  pred at %39 ne samples=96: under-sampled along sg
+  pred at store to %47 slt samples=32: under-sampled along sg
+  d0 operand 0 samples=195: value = 1*arg4
+  d0 operand 1 (one of 2 families) samples=99: value = 2147483644
+  d0 operand 1 (one of 2 families) samples=96: under-sampled along sg
+stir: tensors=3 coords=4 accesses=24 guards=7 loops=2 round-trip=701/701 samples
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 16B arg0[4*c2] at %54
+  load 4B arg0[1*ite(-1*ult(...,...),0,16) + c3] (through derived quantities) piece 0/2 at %35
+  load 4B arg0[1*zext(ite(ult(...,...),0,16),)] (through derived quantities) piece 0/2 at %35
+  load 4B arg1[64*x+4*arg3] piece 0/4 at %62
+  load 4B arg1[64*x+8*arg3] piece 0/4 at %62
+  load 4B arg1[64*x+12*arg3 + c0] piece 0/4 at %62
+  load 4B arg1[64*x] piece 0/4 at %62
+  load 4B arg1[64*x+5*arg3] piece 0/4 at %69
+  load 4B arg1[64*x+9*arg3] piece 0/4 at %69
+  load 4B arg1[64*x+1*arg3] piece 0/4 at %69
+  load 4B arg1[64*x+13*arg3 + c0] piece 0/4 at %69
+  load 4B arg1[64*x+6*arg3] piece 0/4 at %76
+  load 4B arg1[64*x+10*arg3] piece 0/4 at %76
+  load 4B arg1[64*x+14*arg3 + c0] piece 0/4 at %76
+  load 4B arg1[64*x+2*arg3] piece 0/4 at %76
+  load 4B arg1[64*x+3*arg3] piece 0/4 at %83
+  load 4B arg1[64*x+7*arg3] piece 0/4 at %83
+  load 4B arg1[64*x+11*arg3] piece 0/4 at %83
+  load 4B arg1[64*x+15*arg3 + c0] piece 0/4 at %83
+  load 4B arg1[64*x+3*arg3+1*arg3*ite(-1*ult(...,...),0,16) + c0] (through derived quantities) piece 0/4 at %39
+  load 4B arg1[64*x+1*arg3*zext(ite(ult(...,...),0,16),)] (through derived quantities) piece 0/4 at %39
+  load 4B arg1[64*x+1*arg3+1*arg3*ite(-1*ult(...,...),0,16)] (through derived quantities) piece 0/4 at %39
+  load 4B arg1[64*x+2*arg3+1*arg3*ite(-1*ult(...,...),0,16)] (through derived quantities) piece 0/4 at %39
+  store 4B arg2[64*x + c0] at store to %47
+  guard slt lhs = 64*x+-1*arg3 + (1)*c0
+  guard sgt lhs = 1*arg4
+  guard uge lhs = -4+1*arg4
+  guard ne lhs = 12 (one of 4 families)
+  guard ne lhs = 16 (one of 4 families)
+  guard ne lhs = 4 + (12)*c1 (one of 4 families)
+  guard ne lhs = 8 (one of 4 families)
+  derived d0 = and(1*arg4,0,); the integer operands' constant terms are the operand maps
+    d0 operand 0 = 1*arg4
+    d0 operand 1 = 2147483644 (one of 2 families)
+  loop %48 depth=1 traversal: inductionx2 tuplex1 -> permits: nothing
+  loop %29 depth=1 traversal: inductionx2 tuplex1 -> permits: partition tree-combine
+scatter_add(float const*, int const*, float*, int): sig: T=128 threads-run=32 loops=1 (traversal 1, generic 0, bounded 0, refused 0) device-stores=136 shared-writes=0 shared-reads=0 barriers=0 tensor-calls=0
+  loop %15 depth=1 kind=traversal
+    phi %16 : induction terms=1
+    algebra: inductionx1
+coords: d=1 (output 1, reduction/traversal 0) axes=3 (sg/lane, loop levels 1; derived 1 in φ) sites fitted=6 data-dependent=0 non-affine=0
+  c0 (o) = 32*sg + lane + 128*i0
+  d0 = ld[1*arg1+4*arg3*x] (index tensor read)   [operands' constant terms are the maps below]
+  load %20 4B in %1 samples=136: addr = 1*arg1+4*arg3*x + (4)*c0
+  load %27 4B in %0 samples=136: addr = 4*arg3*x+1*arg0 + (4)*c0
+  atomic %28 4B in %2 through derived quantities samples=136: addr = 1*arg2+4*arg3*sext(d0,) + (4)*c0
+  pred at %20 sgt samples=136: lhs = 1*arg3 + (-1)*c0
+  d0 operand 0 samples=136: value = 1*arg1+4*arg3*x + (4)*c0
+  d0 operand 1 samples=136: value = -1
+stir: tensors=3 coords=1 accesses=3 guards=1 loops=1 round-trip=408/408 samples
+  tensor arg1 elem=4B read dims: d0[stride 4B]
+  tensor arg0 elem=4B read dims: d0[stride 4B]
+  tensor arg2 elem=4B written dims: d0[stride 4B]
+  load 4B arg1[1*arg3*x + c0] at %20
+  load 4B arg0[1*arg3*x + c0] at %27
+  atomic 4B arg2[1*arg3*sext(d0,) + c0] (through derived quantities) at %28
+  guard sgt lhs = 1*arg3 + (-1)*c0
+  derived d0 = ld[1*arg1+4*arg3*x] (index tensor read); the integer operands' constant terms are the operand maps
+    d0 operand 0 = 1*arg1+4*arg3*x + (4)*c0
+    d0 operand 1 = -1
+  loop %15 depth=1 traversal: inductionx1

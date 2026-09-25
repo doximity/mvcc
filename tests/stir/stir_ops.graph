@@ -1,0 +1,7 @@
+# Launch graph for stir_ops. src dst tensor sameBlock hostVisible
+# sameBlock=1: fusion is legal under L11 (Metal has no grid barrier).
+# hostVisible=0: layout of the intermediate is free (L12).
+silu_mul gemv x 1 0
+rmsnorm gemv x 1 0
+softmax_row attn x 1 0
+gemv sgemm x 1 0

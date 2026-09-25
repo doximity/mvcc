@@ -1,0 +1,3 @@
+# STIR Program without CUDA recovery.
+# `mvcc stir-in` / `mvcc-ir2msl --stir-in` construct stir::direct::gemm and run choose/explain.
+kind gemm
