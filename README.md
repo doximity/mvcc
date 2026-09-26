@@ -14,7 +14,7 @@ No NVIDIA software is involved at build or run time. There is no CUDA toolkit, d
 ## Install
 
 ```bash
-brew install llvm cmake ninja
+brew install llvm cmake ninja rust
 git clone https://github.com/doximity/mvcc.git
 cd mvcc
 tools/install_toolkit.sh
