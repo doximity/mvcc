@@ -26,7 +26,7 @@ nvcc --version
 
 ### Ruby gem
 
-The gem builds the same toolkit when it is installed, so it needs the Homebrew packages and Rust listed above:
+The gem needs Ruby 3.1 or later (`brew install ruby`; the `/usr/bin/ruby` that comes with macOS is 2.6). It builds the same toolkit when it is installed, so it also needs the Homebrew packages and Rust listed above:
 
 ```bash
 gem build mvcc.gemspec --output mvcc.gem
@@ -246,7 +246,7 @@ Bug reports and pull requests are welcome. A small `.cu` file that reproduces th
 
 Contributors must sign the Doximity Individual Contributor License Agreement, which is reproduced in [CONTRIBUTING.md](CONTRIBUTING.md); submitting a contribution means you agree to it.
 
-Before opening a pull request, run `tests/run.sh` on an Apple silicon Mac. `tests/run.sh --host` builds and checks the compiler without running kernels on the GPU.
+Before opening a pull request, run `tests/run.sh` on an Apple silicon Mac. It also tests the Ruby gem, so it needs Ruby 3.1 or later, as the gem does. `tests/run.sh --host` builds and checks the compiler without running kernels on the GPU.
 
 Please report security vulnerabilities privately, as described in [Doximity's security policy](https://www.doximity.com/about/security), rather than in a public issue.
 

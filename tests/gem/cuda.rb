@@ -6,6 +6,7 @@
 
 require "open3"
 require "rbconfig"
+require "shellwords"
 require "tmpdir"
 
 require_relative "../../lib/mvcc"
@@ -56,7 +57,8 @@ check("buffer type", Mvcc::Cuda.fiddle_type(buf) == Fiddle::TYPE_VOIDP)
 check("libext", Mvcc.libext == (RUBY_PLATFORM.include?("darwin") ? "dylib" : "so"))
 check("shared flags empty on darwin", !RUBY_PLATFORM.include?("darwin") || Mvcc.shared_flags.empty?)
 
-cc = RbConfig::CONFIG["CC"] || "cc"
+# CC is a command line (Apple's Ruby has "xcrun clang"), not an executable path.
+cc = Shellwords.split(RbConfig::CONFIG["CC"] || "cc")
 so = File.join(Dir.mktmpdir("mvcc-ruby-test-"), "host.#{Mvcc.libext}")
 c_src = <<~C
   void mandelbrot(char* host, int w, int h) {
@@ -71,7 +73,7 @@ c_src = <<~C
     }
   }
 C
-out, status = Open3.capture2e(cc, "-shared", "-o", so, "-x", "c", "-", stdin_data: c_src)
+out, status = Open3.capture2e(*cc, "-shared", "-o", so, "-x", "c", "-", stdin_data: c_src)
 check("host shared lib builds", status.success?)
 unless status.success?
   puts out
