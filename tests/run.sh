@@ -92,7 +92,14 @@ if MVCC_TENSOR_DIAG=1 nvcc -O2 -std=c++17 -o "$OUT/gemm_ptx" "$ROOT/tests/kernel
   if [ "$HOST" = 1 ]; then
     printf '  [skip] gemm_ptx recovered/exact-twins (--host: no GPU)\n'
   else
-    if MVCC_TENSOR_DIAG=1 "$OUT/gemm_ptx" >"$OUT/gemm_ptx.log" 2>&1 && grep -q 'recovered kernels enabled' "$OUT/gemm_ptx.log"; then ok "gemm_ptx recovered vs CPU (layout verified on device)"; else bad "gemm_ptx recovered (see $OUT/gemm_ptx.log)"; fi
+    # Recovered kernels are required on M5 and later GPUs; earlier ones may fail the cooperative-tensor layout
+    # verification, and then the runtime runs the exact twins.
+    chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null); gen=0
+    [[ $chip =~ ^Apple\ M([0-9]+) ]] && gen=${BASH_REMATCH[1]}
+    if ! MVCC_TENSOR_DIAG=1 "$OUT/gemm_ptx" >"$OUT/gemm_ptx.log" 2>&1; then bad "gemm_ptx recovered (see $OUT/gemm_ptx.log)"
+    elif grep -q 'recovered kernels enabled' "$OUT/gemm_ptx.log"; then ok "gemm_ptx recovered vs CPU (layout verified on device)"
+    elif [ "$gen" -lt 5 ] && grep -q 'using exact kernels' "$OUT/gemm_ptx.log"; then ok "gemm_ptx vs CPU on exact kernels (${chip:-unknown chip}; recovered kernels are checked on M5 and later)"
+    else bad "gemm_ptx recovered (see $OUT/gemm_ptx.log)"; fi
     run gemm_ptx-exact-twins env MVCC_TENSOR_EXACT=1 "$OUT/gemm_ptx"
   fi
 else bad "gemm_ptx: compile (see $OUT/gemm_ptx.build.log)"; fi
@@ -226,7 +233,8 @@ elif [ -x "$OUT/gemm_ptx" ]; then ok "gemm_ptx exact twins: covered by gemm_ptx-
 fi
 if [ "$QUICK" = 0 ] && [ "$HOST" = 0 ]; then
   if nvcc -O2 -std=c++17 -o "$OUT/gemm_ptx" "$ROOT/tests/kernels/gemm_ptx.cu" >/dev/null 2>&1 && "$OUT/gemm_ptx" --bench >"$OUT/gemm_ptx.bench.log" 2>&1; then
-    ok "gemm_ptx bench ($(grep '64x64/32x32 s2 reuse' "$OUT/gemm_ptx.bench.log" | tail -1 | grep -o '[0-9.]* TFLOP/s') on TensorOps, 64x64 tile)"
+    engine=TensorOps; grep -q 'using exact kernels' "$OUT/gemm_ptx.bench.log" && engine="exact kernels"
+    ok "gemm_ptx bench ($(grep '64x64/32x32 s2 reuse' "$OUT/gemm_ptx.bench.log" | tail -1 | grep -o '[0-9.]* TFLOP/s') on $engine, 64x64 tile)"
   else bad "gemm_ptx bench (see $OUT/gemm_ptx.bench.log)"; fi
   if nvcc -O3 -std=c++17 -o "$OUT/roofline" "$ROOT/tests/kernels/roofline.cu" >"$OUT/roofline.build.log" 2>&1 && "$OUT/roofline" >"$OUT/roofline.log" 2>&1; then
     ok "roofline ($(grep 'read  bandwidth' "$OUT/roofline.log" | sed 's/.*: *//; s/ (.*//'))"
