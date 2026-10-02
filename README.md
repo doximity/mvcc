@@ -24,17 +24,6 @@ nvcc --version
 
 `tools/install_toolkit.sh` builds the compiler and runtime into `toolkit/`, which is laid out like a CUDA 12.8 installation so that CMake's `enable_language(CUDA)` and `find_package(CUDAToolkit)` work unchanged. `nvcc --version` identifies the build as `mvcc_<version>_0`.
 
-### Ruby gem
-
-The gem needs Ruby 3.1 or later (`brew install ruby`; the `/usr/bin/ruby` that comes with macOS is 2.6). It builds the same toolkit when it is installed, so it also needs the Homebrew packages and Rust listed above:
-
-```bash
-gem build mvcc.gemspec --output mvcc.gem
-gem install ./mvcc.gem
-```
-
-The installer then adds the toolkit's `bin` directory to `PATH` in your shell startup files: the file for `$SHELL`, plus any of `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.profile` and Fish's `config.fish` that already exist. Set `MVCC_SKIP_PATH=1` (or `CI=1`) to leave those files alone, or `MVCC_ASK_PATH=1` to be asked first.
-
 ## Usage
 
 Use the toolkit's `nvcc` as you would NVIDIA's:
@@ -56,42 +45,10 @@ cmake --build build
 
 The driver accepts nvcc's command line, including the options CMake generates. Options that have no meaning on Metal are ignored, and unrecognized options are passed to the host compiler with a warning, as `nvcc -forward-unknown-to-host-compiler` does. `-arch` and `-gencode` choose the CUDA feature level that device code is compiled for (`__CUDA_ARCH__`, up to `sm_90`; `sm_89` by default), not a GPU target: Apple's compiler generates code for the GPU that is present when the program first runs. `cudaGetDeviceProperties` reports compute capability 8.9 unless `MVCC_ARCH` asks for a higher one. `mvcc --help` lists the environment variables that control the compiler.
 
-### Ruby
-
-The gem can also compile CUDA at run time and call its `extern "C"` functions from Ruby:
-
-```ruby
-require "mvcc"
-
-lib = Mvcc.compile(<<~'CU')
-  #include <cuda_runtime.h>
-
-  __global__ void fill(char* out, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) out[i] = 'a' + i % 26;
-  }
-
-  extern "C" void alphabet(char* host, int n) {
-    char* dev;
-    cudaMalloc(&dev, n);
-    fill<<<(n + 255) / 256, 256>>>(dev, n);
-    cudaMemcpy(host, dev, n, cudaMemcpyDeviceToHost);
-    cudaFree(dev);
-  }
-CU
-
-buf = Mvcc.buffer(26)
-lib.alphabet(buf, 26)
-puts buf.to_s # abcdefghijklmnopqrstuvwxyz
-```
-
-`Mvcc.compile` takes CUDA source or the path of a `.cu` file, and caches the compiled library under `~/Library/Caches/mvcc/ruby`. Integers are passed as `int`, floats as `float`, and `Mvcc.buffer` objects as pointers to host memory.
-
 ## Examples
 
 - [`examples/qwen`](examples/qwen): inference for Qwen3.5-35B-A3B, a mixture-of-experts language model, written as ordinary CUDA C++. It decodes at about 80 tokens/s on an M5 Pro.
 - [`examples/hashhunt`](examples/hashhunt): a brute-force MD5 search, checked against the same search in C++.
-- [`examples/ruby`](examples/ruby): three terminal demos of the Ruby API, two fractal renderers and a forest you can fly through with the arrow keys.
 
 ## Limitations
 
@@ -235,7 +192,6 @@ MVCC_METALLIB_DIR=./metallibs ./app
 | `cpp/mvcc-metal`     | Objective-C++ layer between the runtime and Metal                                               |
 | `include`            | CUDA-compatible headers                                                                         |
 | `msl`                | Metal prelude included in generated shaders                                                     |
-| `lib`, `ext`         | Ruby gem                                                                                        |
 | `examples`           | Example programs                                                                                |
 | `tests`              | Test suite (`tests/run.sh`)                                                                     |
 | `tools`              | Build, release and maintenance scripts                                                          |
@@ -246,7 +202,7 @@ Bug reports and pull requests are welcome. A small `.cu` file that reproduces th
 
 Contributors must sign the Doximity Individual Contributor License Agreement, which is reproduced in [CONTRIBUTING.md](CONTRIBUTING.md); submitting a contribution means you agree to it.
 
-Before opening a pull request, run `tests/run.sh` on an Apple silicon Mac. It also tests the Ruby gem, so it needs Ruby 3.1 or later, as the gem does. `tests/run.sh --host` builds and checks the compiler without running kernels on the GPU.
+Before opening a pull request, run `tests/run.sh` on an Apple silicon Mac. `tests/run.sh --host` builds and checks the compiler without running kernels on the GPU.
 
 Please report security vulnerabilities privately, as described in [Doximity's security policy](https://www.doximity.com/about/security), rather than in a public issue.
 

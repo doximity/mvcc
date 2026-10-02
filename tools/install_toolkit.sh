@@ -6,25 +6,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TK="$ROOT/toolkit"
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 PROFILE="${1:-release}"
-FROM_GEM="${MVCC_INSTALL_FROM_GEM:-}"
 
-# `-w /dev/tty` is true even without a controlling terminal (scripts, CI, editor shells);
-# only the open() tells. Probe in a subshell so a failure cannot exit this script.
-if [ -n "$FROM_GEM" ] && ( : >/dev/tty ) 2>/dev/null; then
-  exec >/dev/tty 2>&1
-fi
-
-run_cmake() {
-  if [ -n "$FROM_GEM" ]; then cmake "$@"; else cmake "$@" >/dev/null; fi
-}
-
-run_cmake_build() {
-  if [ -n "$FROM_GEM" ]; then cmake --build "$@"; else cmake --build "$@" 2>&1 | tail -1; fi
-}
-
-run_cargo() {
-  if [ -n "$FROM_GEM" ]; then cargo "$@"; else cargo "$@" 2>&1 | tail -1; fi
-}
+run_cmake() { cmake "$@" >/dev/null; }
+run_cmake_build() { cmake --build "$@" 2>&1 | tail -1; }
+run_cargo() { cargo "$@" 2>&1 | tail -1; }
 
 echo "== cpp (mvcc-ir2msl, mvcc-passes)"
 run_cmake -S "$ROOT/cpp/mvcc-llvm" -B "$ROOT/build/mvcc-llvm" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
@@ -54,9 +39,9 @@ cp -f "$ROOT/msl/mvcc_prelude.metal" "$TK/share/mvcc/mvcc_prelude.metal"
 
 # runtime: one dylib serving both the runtime (libcudart) and driver (libcuda) APIs
 put "$OUT/libcudart.dylib" "$TK/lib64/libcudart.dylib"
-# Gem install paths are longer than @rpath/libcudart.dylib. Without headerpad
-# this fails and `set -e` aborts at "== toolkit layout". Keep going if rewrite
-# still cannot fit; the dylib then stays at @rpath.
+# The absolute toolkit path is longer than @rpath/libcudart.dylib. Without
+# headerpad this fails and `set -e` aborts at "== toolkit layout". Keep going
+# if rewrite still cannot fit; the dylib then stays at @rpath.
 if ! install_name_tool -id "$TK/lib64/libcudart.dylib" "$TK/lib64/libcudart.dylib"; then
   echo "warning: install_name_tool could not set libcudart id; leaving @rpath"
 fi

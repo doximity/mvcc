@@ -42,14 +42,7 @@ if "$ROOT/tools/check_provenance.sh" >"$OUT/provenance.log" 2>&1; then ok "prove
 step "diagnostics guidance"
 # every fail(...) / eprintln!("[mvcc] ...") template in the sources must carry guidance in tools/gen_diagnostics.py.
 run diagnostics-guidance python3 "$ROOT/tools/gen_diagnostics.py" --check
-run gem-publish-guards python3 "$ROOT/tools/check_gem_publish.py" --check
-# The gem tests need a Ruby that mvcc.gemspec accepts; macOS's /usr/bin/ruby is 2.6.
-rb_req='r = Gem::Specification.load(ARGV[0]).required_ruby_version
-abort "Ruby #{RUBY_VERSION} is on PATH; mvcc.gemspec requires #{r} (brew install ruby)" unless r.satisfied_by?(Gem.ruby_version)'
-if rb=$(ruby -e "$rb_req" "$ROOT/mvcc.gemspec" 2>&1); then
-  run gem-installer ruby "$ROOT/tests/gem/installer.rb"
-  run gem-cuda ruby "$ROOT/tests/gem/cuda.rb"
-else bad "gem tests: $rb"; fi
+run version-sync python3 "$ROOT/tools/sync_version.py" --check
 # the surface printer must still parse the emitter's lowering tables and the toolkit's exports.
 run cuda-surface-renders bash -c "python3 '$ROOT/tools/gen_surface.py' | grep -q 'runtime API entry points'"
 

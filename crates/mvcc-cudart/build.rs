@@ -22,7 +22,7 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=IOKit");
     println!("cargo:rustc-link-lib=c++");
     // install name so linked programs find us through rpath. headerpad lets
-    // install_toolkit.sh rewrite the id to the (long) gem toolkit path.
+    // install_toolkit.sh rewrite the id to the toolkit's absolute path.
     println!("cargo:rustc-cdylib-link-arg=-Wl,-install_name,@rpath/libcudart.dylib");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-headerpad_max_install_names");
 }
