@@ -14,7 +14,6 @@ CMakeUserPresets.json
 
 # Release tarballs
 /dist/
-*.gem
 
 # Host-suite / ad-hoc kernel outputs
 tests/out/
