@@ -17,20 +17,25 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsNVPTX.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/GetElementPtrTypeIterator.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/Format.h"
 #include <algorithm>
 #include <chrono>
 #include <functional>
 #include <map>
+#include <optional>
 
 using namespace llvm;
 
 namespace mvcc {
 
 std::string TpDescriptor::tag() const {
-  return mslType() + "_" + std::to_string(M) + "x" + std::to_string(N) + "x" + std::to_string(K) + "_tl" + (tl ? "1" : "0") + "_tr" + (tr ? "1" : "0");
+  return mslType() + "_" + std::to_string(M) + "x" + std::to_string(N) + "x" + std::to_string(K) + "_tl" + (tl ? "1" : "0") + "_tr" + (tr ? "1" : "0") + (dev ? "_dev" : "") + (aShared ? "_tgA" : "") + (bShared ? "_tgB" : "");
 }
 
 namespace {
@@ -46,6 +51,56 @@ bool isKernelFn(const Function& F) {
       if (V == &F && S && S->getString() == "kernel") return true;
     }
   return false;
+}
+
+// An integer or address value as a polynomial over atoms (opaque values; see DevEval).
+struct Poly {
+  std::map<std::vector<unsigned>, int64_t> t;   // monomial (sorted atom ids) -> coefficient, no zero coefficients
+  bool ok = true;                               // false once a coefficient overflowed or the polynomial grew too large
+  static Poly constant(int64_t c) { Poly p; if (c) p.t[{}] = c; return p; }
+  static Poly atom(unsigned a) { Poly p; p.t[{a}] = 1; return p; }
+  bool isConst(int64_t& c) const {
+    if (!ok) return false;
+    if (t.empty()) { c = 0; return true; }
+    if (t.size() == 1 && t.begin()->first.empty()) { c = t.begin()->second; return true; }
+    return false;
+  }
+  bool mentions(const std::function<bool(unsigned)>& pred) const {
+    for (auto& kv : t) for (unsigned a : kv.first) if (pred(a)) return true;
+    return false;
+  }
+  void add(const std::vector<unsigned>& m, int64_t c) {
+    if (!c) return;
+    auto it = t.find(m);
+    if (it == t.end()) { t.emplace(m, c); if (t.size() > 64) ok = false; return; }
+    if (__builtin_add_overflow(it->second, c, &it->second)) ok = false;
+    if (!it->second) t.erase(it);
+  }
+};
+Poly operator+(const Poly& a, const Poly& b) { Poly r = a; r.ok = a.ok && b.ok; for (auto& kv : b.t) r.add(kv.first, kv.second); return r; }
+Poly scaled(const Poly& a, int64_t c) {
+  Poly r; r.ok = a.ok;
+  for (auto& kv : a.t) { int64_t v; if (__builtin_mul_overflow(kv.second, c, &v)) r.ok = false; r.add(kv.first, v); }
+  return r;
+}
+Poly operator-(const Poly& a, const Poly& b) { return a + scaled(b, -1); }
+Poly operator*(const Poly& a, const Poly& b) {
+  Poly r; r.ok = a.ok && b.ok;
+  for (auto& x : a.t) for (auto& y : b.t) {
+    std::vector<unsigned> m = x.first; m.insert(m.end(), y.first.begin(), y.first.end());
+    if (m.size() > 6) { r.ok = false; continue; }
+    std::sort(m.begin(), m.end());
+    int64_t v; if (__builtin_mul_overflow(x.second, y.second, &v)) r.ok = false;
+    r.add(m, v);
+  }
+  return r;
+}
+bool samePoly(const Poly& a, const Poly& b) { return a.ok && b.ok && a.t == b.t; }
+bool divExact(const Poly& a, int64_t d, Poly& out) {
+  out = Poly(); out.ok = a.ok;
+  if (!a.ok || d == 0) return false;
+  for (auto& kv : a.t) { if (kv.second % d) return false; out.t[kv.first] = kv.second / d; }
+  return true;
 }
 
 struct MmaRec;
@@ -67,13 +122,21 @@ struct LdRec {
   bool composite() const { return !parts.empty(); }
   Value* slotWord[4] = {nullptr, nullptr, nullptr, nullptr};  // after rewrite: the block's words in slot order
   MmaRec* firstUse = nullptr;                 // register block: the consumer the conversion is placed before
+  // Register block whose words are 32-bit loads that are, in every warp w, the mma.sync fragment of a row-major
+  // tile at byte address devBase[w] with a row pitch of devLd[w] elements (proveDeviceBlocks), in device memory
+  // (devShared false) or shared memory.
+  bool dev = false;
+  bool devShared = false;
+  std::vector<Poly> devBase, devLd;
+  bool devUsed = false;                       // read by a device-operand matmul: no slot conversion, loads dropped
   bool ok = true;
   std::string why;
 };
 
 struct MmaRec {
   CallInst* CI = nullptr;
-  int type = 0;                               // 0 f16, 1 bf16
+  int type = 0;                               // 0 f16, 1 bf16 (m16n8k16, f32 accumulate); 2 s8, 3 u8 (m16n8k32, s32)
+  int kstep() const { return type >= 2 ? 32 : 16; }
   Value* a[4] = {};
   Value* b[2] = {};
   Value* c[4] = {};
@@ -99,6 +162,13 @@ struct FusedOp {
   int M = 0, N = 0, K = 0;
   int type = 0;
   bool tl = false, tr = false;
+  // Device operands: A and B are read by the matmul from device memory. aPtr, bPtr: this lane's address of word 0
+  // of block (0, 0) (lane 0's is the tile origin, lane 4's one row further).
+  bool dev = false;
+  bool aShared = false, bShared = false;      // device operands that live in shared memory
+  Value* aPtr = nullptr;
+  Value* bPtr = nullptr;
+  Type* accTy = nullptr;                      // f32, or i32 for integer inputs
   int cap() const { return M * N / 32; }
   std::vector<Value*> cList;                  // positions p = tile*4 + r (PTX order), inputs at level 0
   std::vector<Value*> dList;                  // last-level D extracts per position (a pad value at a solo block's padding positions)
@@ -116,7 +186,303 @@ struct SlotGroup {
   BasicBlock* phiBlock = nullptr;
   FusedOp* op = nullptr;                      // when !isPhi
   int M = 0, N = 0;                           // tile shape (for conversions)
+  Type* accTy = nullptr;
   bool valid = true;
+};
+
+// ---------------------------------------------------------------- device-memory fragments
+//
+// A register-built operand block whose words are 32-bit loads can be handed to matmul2d as a device tensor (origin,
+// row pitch) - no fills, no shuffles - when the loads are exactly the mma.sync fragment of one row-major tile in
+// every warp. DevEval evaluates a value for one thread of the block as a polynomial over atoms: values every thread
+// of the block computes alike (arguments, block indices, loads from device memory at such addresses, other opaque
+// uniform values) and loop iteration counts (a header phi with a loop-invariant step is init + step * iteration).
+// The thread index is concrete. As in symexec.h, integer arithmetic on addresses is taken not to wrap.
+bool foldInt(unsigned opc, unsigned w, int64_t x, int64_t y, int64_t& r) {
+  if (w == 0 || w > 64) return false;
+  const APInt a(w, (uint64_t)x, true, true), b(w, (uint64_t)y, true, true);
+  APInt o;
+  switch (opc) {
+    case Instruction::Add: o = a + b; break;
+    case Instruction::Sub: o = a - b; break;
+    case Instruction::Mul: o = a * b; break;
+    case Instruction::And: o = a & b; break;
+    case Instruction::Or: o = a | b; break;
+    case Instruction::Xor: o = a ^ b; break;
+    case Instruction::Shl: if (b.uge(w)) return false; o = a.shl(b); break;
+    case Instruction::LShr: if (b.uge(w)) return false; o = a.lshr(b); break;
+    case Instruction::AShr: if (b.uge(w)) return false; o = a.ashr(b); break;
+    case Instruction::UDiv: if (b.isZero()) return false; o = a.udiv(b); break;
+    case Instruction::SDiv: if (b.isZero()) return false; o = a.sdiv(b); break;
+    case Instruction::URem: if (b.isZero()) return false; o = a.urem(b); break;
+    case Instruction::SRem: if (b.isZero()) return false; o = a.srem(b); break;
+    default: return false;
+  }
+  r = o.getSExtValue();
+  return true;
+}
+
+class DevEval {
+ public:
+  DevEval(Function& F, LoopInfo& LI) : LI(LI), DL(F.getParent()->getDataLayout()) { taint(F); }
+  bool eval(Value* v, unsigned tid, Poly& out) { return go(v, tid, out, 0) && out.ok; }
+  void newWarp() { threadMemo.clear(); }   // per-thread results are only reused within a warp
+  // The polynomial as an i32 computed before `at`, when every atom is a value available there (not a loop's
+  // iteration count). nullptr otherwise.
+  Value* materialize(const Poly& p, Instruction* at, DominatorTree& DT) {
+    if (!p.ok) return nullptr;
+    for (auto& kv : p.t) for (unsigned a : kv.first) {
+      Value* v = atomValue[a];
+      if (!v || !(v->getType()->isIntegerTy() || v->getType()->isPointerTy())) return nullptr;
+      if (auto* I = dyn_cast<Instruction>(v); I && !DT.dominates(I, at)) return nullptr;
+    }
+    IRBuilder<> B(at);
+    Type* i64 = B.getInt64Ty();
+    Value* sum = nullptr;
+    for (auto& [mono, coef] : p.t) {
+      Value* term = nullptr;
+      for (unsigned a : mono) {
+        Value* v = atomValue[a];
+        v = v->getType()->isPointerTy() ? B.CreatePtrToInt(v, i64) : B.CreateSExtOrTrunc(v, i64);
+        term = term ? B.CreateMul(term, v) : v;
+      }
+      term = !term ? ConstantInt::get(i64, coef) : coef == 1 ? term : B.CreateMul(term, ConstantInt::get(i64, coef));
+      sum = sum ? B.CreateAdd(sum, term) : term;
+    }
+    return B.CreateTrunc(sum ? sum : ConstantInt::get(i64, 0), B.getInt32Ty());
+  }
+
+ private:
+  LoopInfo& LI;
+  const DataLayout& DL;
+  std::set<Value*> perThread;                         // values that can differ between the threads of a block
+  std::set<Value*> laneVarying;                       // ... and between the lanes of one warp
+  std::vector<Value*> atomValue;                      // atom -> the value it stands for (nullptr: an iteration count)
+  std::vector<const Loop*> atomLoop;                  // atom -> the loop whose iteration count it is
+  std::map<Value*, unsigned> atomOf;
+  std::map<const Loop*, unsigned> iterOf;
+  std::map<PHINode*, unsigned> stepping;              // header phis whose step is being evaluated -> their atom
+  std::map<Value*, std::optional<Poly>> uniformMemo;
+  std::map<std::pair<Value*, unsigned>, std::optional<Poly>> threadMemo;
+
+  unsigned atomFor(Value* v) {
+    auto it = atomOf.find(v);
+    if (it != atomOf.end()) return it->second;
+    atomValue.push_back(v); atomLoop.push_back(nullptr);
+    return atomOf[v] = (unsigned)atomValue.size() - 1;
+  }
+  unsigned iterFor(const Loop* L) {
+    auto it = iterOf.find(L);
+    if (it != iterOf.end()) return it->second;
+    atomValue.push_back(nullptr); atomLoop.push_back(L);
+    return iterOf[L] = (unsigned)atomValue.size() - 1;
+  }
+  // an atom whose value can change from one iteration of L to the next
+  bool variantIn(unsigned a, const Loop* L) const {
+    if (const Loop* AL = atomLoop[a]) return L->contains(AL);
+    auto* I = dyn_cast_or_null<Instruction>(atomValue[a]);
+    return I && L->contains(I);
+  }
+
+  void taint(Function& F) {
+    std::vector<Value*> work;
+    auto mark = [&](Value* v) { if (perThread.insert(v).second) work.push_back(v); };
+    for (Instruction& I : instructions(F)) {
+      if (auto* CI = dyn_cast<CallInst>(&I)) {
+        Function* Cf = CI->getCalledFunction();
+        const StringRef n = Cf ? Cf->getName() : StringRef();
+        const bool uniform = n.starts_with("llvm.nvvm.read.ptx.sreg.ctaid.") || n.starts_with("llvm.nvvm.read.ptx.sreg.nctaid.") ||
+                             n.starts_with("llvm.nvvm.read.ptx.sreg.ntid.") ||
+                             (Cf && Cf->isIntrinsic() && !n.starts_with("llvm.nvvm.") && Cf->doesNotAccessMemory() && !Cf->isConvergent());
+        if (!uniform) mark(CI);
+        continue;
+      }
+      if (isa<AllocaInst>(I) || isa<AtomicRMWInst>(I) || isa<AtomicCmpXchgInst>(I)) { mark(&I); continue; }
+      if (auto* L = dyn_cast<LoadInst>(&I)) {
+        const Value* obj = getUnderlyingObject(L->getPointerOperand(), 12);
+        if (!L->isSimple() || L->getPointerAddressSpace() == 3 || obj->getType()->getPointerAddressSpace() == 3 || isa<AllocaInst>(obj)) mark(L);
+        continue;
+      }
+      // a merge of different values is decided by the path taken, which may differ between threads (a loop header
+      // phi is the same iteration for every thread that reaches a warp-synchronous mma)
+      if (auto* PN = dyn_cast<PHINode>(&I)) {
+        const Loop* Lp = LI.getLoopFor(PN->getParent());
+        if (Lp && Lp->getHeader() == PN->getParent()) continue;
+        for (Value* v : PN->incoming_values()) if (v != PN->getIncomingValue(0)) { mark(PN); break; }
+      }
+    }
+    const std::vector<Value*> sources = work;
+    while (!work.empty()) {
+      Value* v = work.back(); work.pop_back();
+      for (User* U : v->users()) if (auto* UI = dyn_cast<Instruction>(U)) if (!UI->getType()->isVoidTy()) mark(UI);
+    }
+    // Lane-varying: the same propagation, except that tid.x >> 5 (or more), tid.x / 32k and tid.x & ~31 are the
+    // warp index (blocks are one-dimensional, as everywhere in this evaluator), the same in every lane of a warp. A
+    // per-thread value that is not lane-varying is one value per warp: within a warp it can stand as an atom.
+    auto isTid = [](Value* v) {
+      auto* C = dyn_cast<CallInst>(v);
+      return C && C->getCalledFunction() && C->getCalledFunction()->getName() == "llvm.nvvm.read.ptx.sreg.tid.x";
+    };
+    auto warpIndex = [&](Instruction* I) {
+      auto* BO = dyn_cast<BinaryOperator>(I);
+      auto* C = BO ? dyn_cast<ConstantInt>(BO->getOperand(1)) : nullptr;
+      if (!C || !isTid(BO->getOperand(0)) || C->getBitWidth() > 64) return false;
+      const uint64_t c = C->getZExtValue();
+      switch (BO->getOpcode()) {
+        case Instruction::LShr: return c >= 5;
+        case Instruction::UDiv: return c && c % 32 == 0;
+        case Instruction::And: return (c & 31) == 0;
+        default: return false;
+      }
+    };
+    auto markLane = [&](Value* v) { if (laneVarying.insert(v).second) work.push_back(v); };
+    for (Value* v : sources) markLane(v);
+    while (!work.empty()) {
+      Value* v = work.back(); work.pop_back();
+      for (User* U : v->users())
+        if (auto* UI = dyn_cast<Instruction>(U)) if (!UI->getType()->isVoidTy() && !warpIndex(UI)) markLane(UI);
+    }
+  }
+
+  bool go(Value* v, unsigned tid, Poly& out, int depth) {
+    if (depth > 256) return false;
+    if (auto* C = dyn_cast<ConstantInt>(v)) { if (C->getBitWidth() > 64) return false; out = Poly::constant(C->getSExtValue()); return true; }
+    if (isa<ConstantPointerNull>(v)) { out = Poly(); return true; }
+    const bool thread = perThread.count(v) != 0;
+    const bool memo = stepping.empty();
+    if (memo) {
+      std::optional<Poly>* hit = nullptr;
+      if (thread) { auto it = threadMemo.find({v, tid}); if (it != threadMemo.end()) hit = &it->second; }
+      else { auto it = uniformMemo.find(v); if (it != uniformMemo.end()) hit = &it->second; }
+      if (hit) { if (!*hit) return false; out = **hit; return true; }
+    }
+    Poly r;
+    const bool ok = raw(v, tid, r, depth) && r.ok;
+    if (memo) {
+      std::optional<Poly> m; if (ok) m = r;
+      if (thread) threadMemo[{v, tid}] = m; else uniformMemo[v] = m;
+    }
+    if (ok) out = r;
+    return ok;
+  }
+
+  // An expression the evaluator cannot take apart is an atom, unless it can differ between the lanes of a warp.
+  bool raw(Value* v, unsigned tid, Poly& out, int depth) {
+    const bool lanes = laneVarying.count(v) != 0;
+    auto opaque = [&]() { if (lanes) return false; out = Poly::atom(atomFor(v)); return true; };
+    auto* I = dyn_cast<Instruction>(v);
+    if (!I) return opaque();                          // arguments, globals, constant expressions
+    auto sub = [&](Value* x, Poly& p) { return go(x, tid, p, depth + 1); };
+    if (auto* PN = dyn_cast<PHINode>(I)) return phi(PN, tid, out, depth);
+    if (auto* CI = dyn_cast<CallInst>(I)) {
+      Function* Cf = CI->getCalledFunction();
+      const StringRef n = Cf ? Cf->getName() : StringRef();
+      if (n == "llvm.nvvm.read.ptx.sreg.tid.x") { out = Poly::constant(tid); return true; }
+      if (n == "llvm.nvvm.read.ptx.sreg.laneid") { out = Poly::constant(tid & 31); return true; }
+      return opaque();
+    }
+    if (auto* BO = dyn_cast<BinaryOperator>(I)) {
+      if (!BO->getType()->isIntegerTy() || BO->getType()->getIntegerBitWidth() > 64) return opaque();
+      Poly a, b;
+      if (!sub(BO->getOperand(0), a) || !sub(BO->getOperand(1), b)) return opaque();
+      int64_t x, y;
+      if (a.isConst(x) && b.isConst(y)) {
+        int64_t r;
+        if (!foldInt(BO->getOpcode(), BO->getType()->getIntegerBitWidth(), x, y, r)) return opaque();
+        out = Poly::constant(r); return true;
+      }
+      switch (BO->getOpcode()) {
+        case Instruction::Add: out = a + b; return true;
+        case Instruction::Sub: out = a - b; return true;
+        case Instruction::Mul: out = a * b; return true;
+        case Instruction::Shl: if (b.isConst(y) && y >= 0 && y < 48) { out = scaled(a, (int64_t)1 << y); return true; } break;
+        case Instruction::Or: if (cast<PossiblyDisjointInst>(BO)->isDisjoint()) { out = a + b; return true; } break;
+        default: break;
+      }
+      return opaque();
+    }
+    if (auto* CI = dyn_cast<CastInst>(I)) {
+      Type* st = CI->getSrcTy(); Type* dt = CI->getDestTy();
+      if (!st->isIntOrPtrTy() || !dt->isIntOrPtrTy()) return opaque();
+      Poly a;
+      if (!sub(CI->getOperand(0), a)) return opaque();
+      const unsigned opc = CI->getOpcode();
+      int64_t x;
+      if ((opc == Instruction::ZExt || opc == Instruction::SExt || opc == Instruction::Trunc) && a.isConst(x)) {
+        const unsigned sw = st->getIntegerBitWidth(), dw = dt->getIntegerBitWidth();
+        if (sw > 64 || dw > 64) return opaque();
+        const APInt s(sw, (uint64_t)x, true, true);
+        const APInt r = opc == Instruction::ZExt ? s.zext(dw) : opc == Instruction::SExt ? s.sext(dw) : s.trunc(dw);
+        out = Poly::constant(r.getSExtValue()); return true;
+      }
+      switch (opc) {
+        case Instruction::ZExt: case Instruction::SExt: case Instruction::Trunc: case Instruction::PtrToInt:
+        case Instruction::IntToPtr: case Instruction::AddrSpaceCast: case Instruction::BitCast:
+          out = a; return true;
+        default: return opaque();
+      }
+    }
+    if (auto* G = dyn_cast<GetElementPtrInst>(I)) {
+      Poly p;
+      if (!sub(G->getPointerOperand(), p)) return opaque();
+      for (gep_type_iterator GTI = gep_type_begin(G), E = gep_type_end(G); GTI != E; ++GTI) {
+        Value* idx = GTI.getOperand();
+        if (StructType* ST = GTI.getStructTypeOrNull()) {
+          p = p + Poly::constant((int64_t)DL.getStructLayout(ST)->getElementOffset((unsigned)cast<ConstantInt>(idx)->getZExtValue()));
+          continue;
+        }
+        if (idx->getType()->isVectorTy()) return opaque();
+        Poly ip;
+        if (!sub(idx, ip)) return opaque();
+        p = p + scaled(ip, (int64_t)DL.getTypeAllocSize(GTI.getIndexedType()).getFixedValue());
+      }
+      out = p; return true;
+    }
+    if (auto* S = dyn_cast<SelectInst>(I)) {
+      Poly c; int64_t cv;
+      if (sub(S->getCondition(), c) && c.isConst(cv)) return sub(cv ? S->getTrueValue() : S->getFalseValue(), out) || opaque();
+      return opaque();
+    }
+    if (auto* IC = dyn_cast<ICmpInst>(I)) {
+      Poly a, b; int64_t x, y;
+      Type* t = IC->getOperand(0)->getType();
+      const unsigned w = t->isPointerTy() ? 64 : t->isIntegerTy() ? t->getIntegerBitWidth() : 0;
+      if (w && w <= 64 && sub(IC->getOperand(0), a) && sub(IC->getOperand(1), b) && a.isConst(x) && b.isConst(y)) {
+        out = Poly::constant(ICmpInst::compare(APInt(w, (uint64_t)x, true, true), APInt(w, (uint64_t)y, true, true), IC->getPredicate()) ? 1 : 0);
+        return true;
+      }
+      return opaque();
+    }
+    if (isa<FreezeInst>(I)) return sub(I->getOperand(0), out) || opaque();
+    return opaque();
+  }
+
+  bool phi(PHINode* PN, unsigned tid, Poly& out, int depth) {
+    auto st = stepping.find(PN);
+    if (st != stepping.end()) { out = Poly::atom(st->second); return true; }
+    const bool lanes = laneVarying.count(PN) != 0;
+    auto opaque = [&]() { if (lanes) return false; out = Poly::atom(atomFor(PN)); return true; };
+    bool same = true;
+    for (Value* v : PN->incoming_values()) if (v != PN->getIncomingValue(0)) same = false;
+    if (same) return go(PN->getIncomingValue(0), tid, out, depth + 1) || opaque();
+    const Loop* L = LI.getLoopFor(PN->getParent());
+    if (!L || L->getHeader() != PN->getParent() || PN->getNumIncomingValues() != 2) return opaque();
+    int in = -1, ex = -1;
+    for (int i = 0; i < 2; i++) (L->contains(PN->getIncomingBlock(i)) ? in : ex) = i;
+    if (in < 0 || ex < 0) return opaque();
+    Poly init;
+    if (!go(PN->getIncomingValue(ex), tid, init, depth + 1)) return opaque();
+    const unsigned self = atomFor(PN);
+    stepping[PN] = self;
+    Poly next;
+    const bool okN = go(PN->getIncomingValue(in), tid, next, depth + 1);
+    stepping.erase(PN);
+    if (okN) {
+      const Poly step = next - Poly::atom(self);
+      if (step.ok && !step.mentions([&](unsigned a) { return variantIn(a, L); })) { out = init + step * Poly::atom(iterFor(L)); return true; }
+    }
+    return opaque();
+  }
 };
 
 class KernelRecovery {
@@ -131,6 +497,8 @@ class KernelRecovery {
   const TensorRecoveryOptions& opts;
   TensorRecoveryResult& res;
   DominatorTree DT;
+  std::unique_ptr<LoopInfo> devLI;            // proveDeviceBlocks' analyses, kept for rewrite (pitch materialization)
+  std::unique_ptr<DevEval> devEval;
   std::vector<std::unique_ptr<LdRec>> lds;
   std::vector<std::unique_ptr<MmaRec>> mmas;
   std::map<CallInst*, LdRec*> ldByCI;
@@ -166,6 +534,7 @@ class KernelRecovery {
   void analyzeChains();
   void analyzeOperands();
   void pairMmas();
+  void proveDeviceBlocks();
   bool buildGrids();
   void validateFixpoint();
   void typeAccumulators();
@@ -206,9 +575,11 @@ bool KernelRecovery::collect() {
         dt = in.mods[in.mods.size() - 4]; at = in.mods[in.mods.size() - 3]; bt = in.mods[in.mods.size() - 2]; ct = in.mods[in.mods.size() - 1];
         auto rec = std::make_unique<MmaRec>();
         rec->CI = CI;
-        if (shape != "m16n8k16" || dt != "f32" || ct != "f32" || at != bt || (at != "f16" && at != "bf16") || !in.hasMod("row") || !in.hasMod("col"))
-          rec->fail("mma variant " + in.full() + " is not recoverable (TensorOps on this OS: f16/bf16 inputs, f32 accumulate)");
-        rec->type = at == "bf16" ? 1 : 0;
+        const bool fp = shape == "m16n8k16" && dt == "f32" && ct == "f32" && at == bt && (at == "f16" || at == "bf16");
+        const bool i8 = shape == "m16n8k32" && dt == "s32" && ct == "s32" && at == bt && (at == "s8" || at == "u8") && !in.hasMod("satfinite");
+        if (!(fp || i8) || !in.hasMod("row") || !in.hasMod("col"))
+          rec->fail("mma variant " + in.full() + " is not recoverable (TensorOps on this OS: f16/bf16 inputs with f32 accumulate, s8/u8 inputs with s32 accumulate and wrapping)");
+        rec->type = at == "bf16" ? 1 : at == "s8" ? 2 : at == "u8" ? 3 : 0;
         if (CI->arg_size() != 10) rec->fail("unexpected mma operand count");
         else {
           for (int i = 0; i < 4; i++) rec->a[i] = CI->getArgOperand(i);
@@ -661,6 +1032,102 @@ void KernelRecovery::pairMmas() {
   }
 }
 
+// The memory a fragment word's pointer reaches: 0 device memory (behind a kernel argument or a pointer loaded from
+// memory, or the pointer's bits in one lane of a vector load: a by-value struct's pointer fields loaded together),
+// 1 a shared-memory object, -1 local memory or unknown.
+static int memoryOf(const Value* ptr) {
+  const Value* obj = getUnderlyingObject(ptr, 12);
+  if (ptr->getType()->getPointerAddressSpace() == 3 || obj->getType()->getPointerAddressSpace() == 3)
+    return isa<GlobalVariable>(obj) ? 1 : -1;
+  if (auto* I2P = dyn_cast<IntToPtrInst>(obj))
+    if (auto* E = dyn_cast<ExtractElementInst>(I2P->getOperand(0))) obj = E->getVectorOperand();
+  return isa<Argument>(obj) || isa<LoadInst>(obj) ? 0 : -1;
+}
+
+// Register-built blocks whose four words are 32-bit loads from device memory: proven, for every warp of the launch
+// bound, to be the mma.sync fragment of one row-major tile - word r of lane l = 4g + t at origin + (row * pitch +
+// col) * esize with A: row g + 8(r&1), col kw*t + half*(r>>1); B (x.b0, x.b1, y.b0, y.b1): row g + 8(r>>1), col
+// kw*t + half*(r&1); kw = 2 (16-bit) or 4 (8-bit) elements per word, half = 8 or 16 - origin and pitch the same
+// polynomials for all lanes of the warp. Lane 0's word 0 is then the origin and lane 4's one row further.
+void KernelRecovery::proveDeviceBlocks() {
+  std::map<LdRec*, int> typeOf;   // element type of each block, from its consumers (-1: conflicting)
+  for (auto& mp : mmas) {
+    if (!mp->ok) continue;
+    for (auto* srcs : {&mp->aSrc, &mp->bSrc}) for (LdRec* l : *srcs) {
+      auto it = typeOf.find(l);
+      if (it == typeOf.end()) typeOf[l] = mp->type; else if (it->second != mp->type) it->second = -1;
+    }
+  }
+  std::vector<LdRec*> cands;
+  for (auto& lp : lds) {
+    LdRec* ld = lp.get();
+    if (!ld->reg) continue;
+    const char* op = ld->kind ? "B" : "A";
+    if (ld->solo || ld->regWords.size() != 4 || !typeOf.count(ld) || typeOf[ld] < 0) {
+      note(std::string("register-built ") + op + " block is not a memory tile candidate (" +
+           (ld->solo ? "a single n8 tile" : ld->regWords.size() != 4 ? "not four words" : "mixed element types") + ")");
+      continue;
+    }
+    // the tile must be device memory (behind a kernel argument or a pointer loaded from memory) or a shared-memory
+    // object, the same for the four words; never local memory
+    std::string why;
+    int space = -1;
+    for (Value* w : ld->regWords) {
+      auto* L = dyn_cast<LoadInst>(w);
+      if (!L || !L->isSimple() || !L->getType()->isIntegerTy(32)) { why = "a word is not a plain 32-bit load"; break; }
+      const int s = memoryOf(L->getPointerOperand());
+      if (s < 0) { why = "a word's memory is neither behind a kernel argument or loaded pointer nor a shared object"; break; }
+      if (space >= 0 && s != space) { why = "its words are in different memories"; break; }
+      space = s;
+    }
+    if (!why.empty()) { note(std::string("register-built ") + op + " block stays a register fragment: " + why); continue; }
+    ld->devShared = space == 1;
+    cands.push_back(ld);
+  }
+  if (cands.empty()) return;
+  const unsigned T = kernelMaxThreads(F);
+  if (!T || T % 32) { note("fragments loaded from device memory stay on the cooperative path: the kernel has no __launch_bounds__ (a multiple of 32) to prove their layout for"); return; }
+  devLI = std::make_unique<LoopInfo>(DT);
+  devEval = std::make_unique<DevEval>(F, *devLI);
+  DevEval& E = *devEval;
+  std::vector<std::string> why(cands.size());
+  for (unsigned w = 0; w < T / 32; w++) {
+    E.newWarp();
+    for (size_t ci = 0; ci < cands.size(); ci++) {
+      if (!why[ci].empty()) continue;
+      LdRec* ld = cands[ci];
+      const int type = typeOf[ld];
+      const int64_t es = type >= 2 ? 1 : 2, kw = 4 / es, half = type >= 2 ? 16 : 8;
+      Poly addr[32][4];
+      for (unsigned l = 0; l < 32 && why[ci].empty(); l++)
+        for (int r = 0; r < 4; r++)
+          if (!E.eval(cast<LoadInst>(ld->regWords[r])->getPointerOperand(), 32 * w + l, addr[l][r])) { why[ci] = "a fragment address is not a polynomial in the thread index"; break; }
+      if (!why[ci].empty()) continue;
+      const Poly base = addr[0][0];
+      Poly pitch;
+      if (!divExact(addr[4][0] - base, es, pitch)) { why[ci] = "the fragment rows are not a whole number of elements apart"; continue; }
+      for (unsigned l = 0; l < 32 && why[ci].empty(); l++)
+        for (int r = 0; r < 4; r++) {
+          const int64_t g = l >> 2, t = l & 3;
+          const int64_t row = ld->kind == 0 ? g + 8 * (r & 1) : g + 8 * (r >> 1);
+          const int64_t col = ld->kind == 0 ? kw * t + half * (r >> 1) : kw * t + half * (r & 1);
+          if (!samePoly(addr[l][r], base + scaled(pitch, row * es) + Poly::constant(col * es))) {
+            why[ci] = "word " + std::to_string(r) + " of lane " + std::to_string(l) + " in warp " + std::to_string(w) + " is not at its mma.sync fragment position";
+            break;
+          }
+        }
+      if (!why[ci].empty()) continue;
+      ld->devBase.push_back(base); ld->devLd.push_back(pitch);
+    }
+  }
+  for (size_t ci = 0; ci < cands.size(); ci++) {
+    LdRec* ld = cands[ci];
+    if (why[ci].empty()) { ld->dev = true; continue; }
+    ld->devBase.clear(); ld->devLd.clear();
+    note(std::string("register-built ") + (ld->kind ? "B" : "A") + " block loaded from device memory is not a row-major tile fragment: " + why[ci]);
+  }
+}
+
 // ---------------------------------------------------------------- grids -> fused ops
 
 bool KernelRecovery::buildGrids() {
@@ -748,7 +1215,7 @@ bool KernelRecovery::buildGrids() {
       if (!inconsistency.empty()) { failAll("A/B block sharing differs between k-steps: " + inconsistency); continue; }
       int type = chains[0]->type;
       bool sameType = true; for (MmaRec* h : chains) for (MmaRec* m = h; m; m = m->next) if (m->type != type) sameType = false;
-      if (!sameType) { failAll("mixed f16/bf16 mmas in one warp tile"); continue; }
+      if (!sameType) { failAll("mixed input types in one warp tile"); continue; }
       if (solos) note(std::to_string(solos) + " B block(s) of a single n8 tile zero-padded to 16 columns (no n8 neighbor in the warp; half of each op's B is padding)");
       // transposition flags: all A ldmatrix share .trans, all B share .trans
       int aT = -1, bT = -1; bool tOk = true;
@@ -757,29 +1224,103 @@ bool KernelRecovery::buildGrids() {
         for (LdRec* ld : m->bSrc) { if (bT >= 0 && bT != (int)ld->trans) tOk = false; bT = ld->trans; }
       }
       if (!tOk) { failAll("mixed .trans / non-.trans ldmatrix for one operand"); continue; }
-      // partition: mt groups of <=2, np groups of <=2, level groups of <=2; each op needs a 32 somewhere
-      std::vector<std::pair<int, int>> mtG, npG, lvG;
+      const bool integer = type >= 2;
+      const int kstep = chains[0]->kstep();
+      Type* accTy = integer ? Type::getInt32Ty(F.getContext()) : Type::getFloatTy(F.getContext());
+      // partition: mt groups of <=2, np groups of <=2, level groups of gK
       const int gM = std::clamp(opts.groupM, 1, 2), gN = std::clamp(opts.groupN, 1, 2);
-      // K depth 32 per op whenever the chain allows it: measured on M5 Pro, 32x32x32 ops beat two 32x32x16 ops for
-      // every warp tile (64x128/32x64: 13.6 -> 23.3 TFLOP/s; 128x64/64x32 and 64x64/32x32: unchanged)
-      const int gK = opts.groupK ? std::clamp(opts.groupK, 1, 2) : 2;
-      for (int i = 0; i < MT; i += gM) mtG.push_back({i, std::min(MT, i + gM)});
-      for (int i = 0; i < NP; i += gN) npG.push_back({i, std::min(NP, i + gN)});
-      for (size_t i = 0; i < L; i += gK) lvG.push_back({(int)i, (int)std::min(L, i + gK)});
-      bool shapeOk = true;
       std::vector<std::unique_ptr<FusedOp>> local;
-      for (auto& mg : mtG) for (auto& ng : npG) for (auto& lg : lvG) {
-        auto op = std::make_unique<FusedOp>();
-        op->M = 16 * (mg.second - mg.first); op->N = 16 * (ng.second - ng.first); op->K = 16 * (lg.second - lg.first);
-        if (op->M != 32 && op->N != 32 && op->K != 32) { shapeOk = false; }
-        op->type = type; op->tl = aT == 1; op->tr = bT == 0;
-        op->m.assign(mg.second - mg.first, std::vector<std::vector<MmaRec*>>(2 * (ng.second - ng.first), std::vector<MmaRec*>(lg.second - lg.first)));
-        for (int mt = mg.first; mt < mg.second; mt++) for (int nt = 2 * ng.first; nt < 2 * ng.second; nt++) for (int lv = lg.first; lv < lg.second; lv++)
-          op->m[mt - mg.first][nt - 2 * ng.first][lv - lg.first] = grid[mt][nt][lv];
-        local.push_back(std::move(op));
+      auto form = [&](bool dev, int gK) {
+        local.clear();
+        std::vector<std::pair<int, int>> mtG, npG, lvG;
+        for (int i = 0; i < MT; i += gM) mtG.push_back({i, std::min(MT, i + gM)});
+        for (int i = 0; i < NP; i += gN) npG.push_back({i, std::min(NP, i + gN)});
+        for (size_t i = 0; i < L; i += gK) lvG.push_back({(int)i, (int)std::min(L, i + (size_t)gK)});
+        for (auto& mg : mtG) for (auto& ng : npG) for (auto& lg : lvG) {
+          auto op = std::make_unique<FusedOp>();
+          op->M = 16 * (mg.second - mg.first); op->N = 16 * (ng.second - ng.first); op->K = kstep * (lg.second - lg.first);
+          op->type = type; op->tl = aT == 1; op->tr = bT == 0; op->dev = dev; op->accTy = accTy;
+          op->m.assign(mg.second - mg.first, std::vector<std::vector<MmaRec*>>(2 * (ng.second - ng.first), std::vector<MmaRec*>(lg.second - lg.first)));
+          for (int mt = mg.first; mt < mg.second; mt++) for (int nt = 2 * ng.first; nt < 2 * ng.second; nt++) for (int lv = lg.first; lv < lg.second; lv++)
+            op->m[mt - mg.first][nt - 2 * ng.first][lv - lg.first] = grid[mt][nt][lv];
+          local.push_back(std::move(op));
+        }
+      };
+      // Device operands: every A and B block is a fragment read straight from device memory (proveDeviceBlocks).
+      // The matmul then reads the tile itself - no fills, no shuffles - and takes K up to 128 per call.
+      bool devAll = true;
+      for (MmaRec* h : chains) for (MmaRec* m = h; m; m = m->next)
+        for (auto* srcs : {&m->aSrc, &m->bSrc}) for (LdRec* ld : *srcs) if (!ld->reg || !ld->dev) devAll = false;
+      // the blocks of one op must be one row-major tile in every warp (block (mt, k-step) at mt*16 rows and
+      // k-step*kstep columns from block (0, 0), one row pitch), and nothing may write memory between the fragment
+      // loads and the op, which reads the tile at its own position
+      auto devOpWhy = [&](FusedOp& op) -> std::string {
+        const int64_t es = integer ? 1 : 2;
+        LdRec* a0 = op.m[0][0][0]->aSrc[0]; LdRec* b0 = op.m[0][0][0]->bSrc[0];
+        const size_t W = a0->devBase.size();
+        for (size_t mt = 0; mt < op.m.size(); mt++) for (size_t nt = 0; nt < op.m[mt].size(); nt++) for (size_t lv = 0; lv < op.m[mt][nt].size(); lv++) {
+          MmaRec* m = op.m[mt][nt][lv];
+          LdRec* a = m->aSrc[0]; LdRec* b = m->bSrc[0];
+          if (a->devBase.size() != W || b->devBase.size() != W) return "blocks proven for different warp counts";
+          if (a->devShared != a0->devShared || b->devShared != b0->devShared) return "the blocks of one operand are in different memories";
+          for (size_t w = 0; w < W; w++) {
+            const Poly wa = a0->devBase[w] + scaled(a0->devLd[w], 16 * (int64_t)mt * es) + Poly::constant(kstep * (int64_t)lv * es);
+            const Poly wb = b0->devBase[w] + scaled(b0->devLd[w], 16 * (int64_t)(nt / 2) * es) + Poly::constant(kstep * (int64_t)lv * es);
+            if (!samePoly(a->devBase[w], wa) || !samePoly(a->devLd[w], a0->devLd[w]))
+              return "A block (" + std::to_string(mt) + ", k-step " + std::to_string(lv) + ") of warp " + std::to_string(w) + " is not where one row-major tile puts it";
+            if (!samePoly(b->devBase[w], wb) || !samePoly(b->devLd[w], b0->devLd[w]))
+              return "B block (" + std::to_string(nt / 2) + ", k-step " + std::to_string(lv) + ") of warp " + std::to_string(w) + " is not where one row-major tile puts it";
+          }
+        }
+        BasicBlock* BB = nullptr; Instruction* first = nullptr; Instruction* last = nullptr;
+        for (auto& x : op.m) for (auto& y : x) for (MmaRec* m : y) {
+          std::vector<Instruction*> is = {m->CI};
+          for (LdRec* l : {m->aSrc[0], m->bSrc[0]}) for (Value* w : l->regWords) is.push_back(cast<Instruction>(w));
+          for (Instruction* I : is) {
+            if (!BB) BB = I->getParent();
+            if (I->getParent() != BB) return "the fragment loads and the mmas of one matmul are not in one basic block";
+            if (!first || I->comesBefore(first)) first = I;
+            if (!last || last->comesBefore(I)) last = I;
+          }
+        }
+        for (Instruction* I = first; I != last; I = I->getNextNode()) {
+          if (auto* CI = dyn_cast<CallInst>(I); CI && mmaByCI.count(CI)) continue;
+          if (I->mayWriteToMemory()) return "memory may be written between the fragment loads and the matmul";
+        }
+        return "";
+      };
+      std::string devWhy;
+      if (devAll) {
+        const int maxLv = 128 / kstep;
+        form(true, opts.groupK ? std::clamp(opts.groupK, 1, maxLv) : maxLv);
+        for (auto& op : local) if (devWhy.empty()) devWhy = devOpWhy(*op);
+        if (!devWhy.empty()) local.clear();
       }
-      if (!shapeOk) { failAll("warp tile too small for cooperative TensorOps (needs 32 in M, N or K: " + std::to_string(16 * MT) + "x" + std::to_string(16 * NP) + "x" + std::to_string(16 * L) + " per K slab)"); continue; }
-      for (auto& op : local) ops.push_back(std::move(op));
+      if (local.empty()) {
+        if (integer) {
+          failAll(std::string("s8/u8 mma operands are recovered as fragments read straight from device memory only (") +
+                  (devAll ? devWhy : "an A or B block is an ldmatrix or a computed fragment") + ")");
+          continue;
+        }
+        if (devAll) note("device-memory fragments kept on the cooperative path: " + devWhy);
+        // cooperative operands: K depth 32 per op whenever the chain allows it; measured on M5 Pro, 32x32x32 ops
+        // beat two 32x32x16 ops for every warp tile (64x128/32x64: 13.6 -> 23.3 TFLOP/s; 128x64/64x32 and
+        // 64x64/32x32: unchanged). Each op needs a 32 somewhere.
+        form(false, opts.groupK ? std::clamp(opts.groupK, 1, 2) : 2);
+        bool shapeOk = true;
+        for (auto& op : local) if (op->M != 32 && op->N != 32 && op->K != 32) shapeOk = false;
+        if (!shapeOk) { failAll("warp tile too small for cooperative TensorOps (needs 32 in M, N or K: " + std::to_string(16 * MT) + "x" + std::to_string(16 * NP) + "x" + std::to_string(16 * L) + " per K slab)"); continue; }
+      }
+      for (auto& op : local) {
+        if (op->dev) {
+          op->aPtr = cast<LoadInst>(op->m[0][0][0]->aSrc[0]->regWords[0])->getPointerOperand();
+          op->bPtr = cast<LoadInst>(op->m[0][0][0]->bSrc[0]->regWords[0])->getPointerOperand();
+          op->aShared = op->m[0][0][0]->aSrc[0]->devShared;
+          op->bShared = op->m[0][0][0]->bSrc[0]->devShared;
+          for (auto& x : op->m) for (auto& y : x) for (MmaRec* m : y) { m->aSrc[0]->devUsed = true; m->bSrc[0]->devUsed = true; }
+        }
+        ops.push_back(std::move(op));
+      }
       any = true;
     }
   }
@@ -845,8 +1386,8 @@ void KernelRecovery::validateFixpoint() {
     std::map<LdRec*, std::vector<FusedOp*>> users;
     for (auto& op : ops) for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) {
       if (!m) continue;
-      for (LdRec* ld : m->aSrc) if (ld->reg) { auto& u = users[ld]; if (std::find(u.begin(), u.end(), op.get()) == u.end()) u.push_back(op.get()); }
-      for (LdRec* ld : m->bSrc) if (ld->reg) { auto& u = users[ld]; if (std::find(u.begin(), u.end(), op.get()) == u.end()) u.push_back(op.get()); }
+      for (LdRec* ld : m->aSrc) if (ld->reg && !ld->devUsed) { auto& u = users[ld]; if (std::find(u.begin(), u.end(), op.get()) == u.end()) u.push_back(op.get()); }
+      for (LdRec* ld : m->bSrc) if (ld->reg && !ld->devUsed) { auto& u = users[ld]; if (std::find(u.begin(), u.end(), op.get()) == u.end()) u.push_back(op.get()); }
     }
     std::set<FusedOp*> drop;
     for (auto& [ld, us] : users) {
@@ -872,7 +1413,6 @@ void KernelRecovery::validateFixpoint() {
 // ---------------------------------------------------------------- accumulator typing
 
 void KernelRecovery::typeAccumulators() {
-  Type* f32 = Type::getFloatTy(F.getContext());
   // C/D lists per op
   for (auto& op : ops) {
     const int MTL = (int)op->m.size(), NTL = (int)op->m[0].size(), LV = (int)op->m[0][0].size();
@@ -882,7 +1422,7 @@ void KernelRecovery::typeAccumulators() {
         // padding positions of a solo B block: C enters as zero (nothing to carry) unless the bundle is slot-typed
         // (filled in below); D gets a stand-in so a slot-typed consumer can take the fused call's word
         for (int r = 0; r < 4; r++) {
-          auto* ph = new FreezeInst(PoisonValue::get(f32), "tp.pad", op->lastMma->CI->getIterator());
+          auto* ph = new FreezeInst(PoisonValue::get(op->accTy), "tp.pad", op->lastMma->CI->getIterator());
           padVals.push_back(ph);
           op->cList.push_back(nullptr); op->dList.push_back(ph);
         }
@@ -891,7 +1431,7 @@ void KernelRecovery::typeAccumulators() {
       for (int r = 0; r < 4; r++) { op->cList.push_back(first->c[r]); op->dList.push_back(last->d[r]); }
       if (!op->lastMma || op->lastMma->CI->comesBefore(last->CI)) op->lastMma = last;
     }
-    auto g = std::make_unique<SlotGroup>(); g->id = (int)groups.size(); g->op = op.get(); g->M = op->M; g->N = op->N;
+    auto g = std::make_unique<SlotGroup>(); g->id = (int)groups.size(); g->op = op.get(); g->M = op->M; g->N = op->N; g->accTy = op->accTy;
     for (size_t p = 0; p < op->dList.size(); p++) { g->vals.push_back(op->dList[p]); if (op->dList[p]) slotOf[op->dList[p]] = {g.get(), (int)p}; }
     groups.push_back(std::move(g));
   }
@@ -906,7 +1446,14 @@ void KernelRecovery::typeAccumulators() {
     }
     return X && X->valid ? X : nullptr;
   };
-  auto allZero = [&](const std::vector<Value*>& vals) { for (Value* v : vals) { if (!v) continue; auto* C = dyn_cast<ConstantFP>(v); if (!C || !C->isZero()) return false; } return true; };
+  auto allZero = [&](const std::vector<Value*>& vals) {
+    for (Value* v : vals) {
+      if (!v) continue;
+      auto* CF = dyn_cast<ConstantFP>(v); auto* CI = dyn_cast<ConstantInt>(v);
+      if (!(CF && CF->isZero()) && !(CI && CI->isZero())) return false;
+    }
+    return true;
+  };
   auto sameList = [](const std::vector<Value*>& have, const std::vector<Value*>& want) {
     if (have.size() != want.size()) return false;
     for (size_t p = 0; p < have.size(); p++) if (want[p] && want[p] != have[p]) return false;
@@ -915,6 +1462,7 @@ void KernelRecovery::typeAccumulators() {
   // candidate phi groups from C lists (and recursively from their incoming lists). A list with padding positions gets
   // a phi per such position whose incoming values are the sources' values at that position.
   std::vector<PHINode*> padPhis;
+  Type* accTy = nullptr;   // of the op whose C list is being typed
   std::function<SlotGroup*(const std::vector<Value*>&, int, int)> phiGroup = [&](const std::vector<Value*>& vals, int M_, int N_) -> SlotGroup* {
     auto* PN0 = dyn_cast<PHINode>(vals[0]);
     if (!PN0) return nullptr;
@@ -923,12 +1471,12 @@ void KernelRecovery::typeAccumulators() {
     for (Value* v : vals) if (v) { uniq.insert(v); live++; }
     if (uniq.size() != live) return nullptr;
     for (Value* v : vals) { if (!v) continue; auto* PN = dyn_cast<PHINode>(v); if (!PN || PN->getParent() != PN0->getParent() || slotOf.count(PN)) return nullptr; }
-    auto g = std::make_unique<SlotGroup>(); g->id = (int)groups.size(); g->isPhi = true; g->phiBlock = PN0->getParent(); g->vals = vals; g->M = M_; g->N = N_;
+    auto g = std::make_unique<SlotGroup>(); g->id = (int)groups.size(); g->isPhi = true; g->phiBlock = PN0->getParent(); g->vals = vals; g->M = M_; g->N = N_; g->accTy = accTy;
     SlotGroup* gp = g.get();
     std::vector<int> padPos;
     for (size_t p = 0; p < vals.size(); p++) {
       if (vals[p]) continue;
-      auto* pn = PHINode::Create(f32, PN0->getNumIncomingValues(), "tp.pad", PN0->getIterator());
+      auto* pn = PHINode::Create(accTy, PN0->getNumIncomingValues(), "tp.pad", PN0->getIterator());
       gp->vals[p] = pn; padPhis.push_back(pn); padPos.push_back((int)p);
     }
     for (size_t p = 0; p < vals.size(); p++) slotOf[gp->vals[p]] = {gp, (int)p};
@@ -941,13 +1489,13 @@ void KernelRecovery::typeAccumulators() {
       if (isa<PHINode>(in[0])) src = phiGroup(in, M_, N_);
       else if (!allZero(in)) src = listSource(in);
       for (int p : padPos) {
-        Value* v = allZero(in) ? ConstantFP::get(f32, 0.0) : src ? src->vals[p] : PoisonValue::get(f32);
+        Value* v = allZero(in) ? Constant::getNullValue(accTy) : src ? src->vals[p] : PoisonValue::get(accTy);
         cast<PHINode>(gp->vals[p])->addIncoming(v, pred);
       }
     }
     return gp;
   };
-  for (auto& op : ops) phiGroup(op->cList, op->M, op->N);
+  for (auto& op : ops) { accTy = op->accTy; phiGroup(op->cList, op->M, op->N); }
   bool changed = true;
   while (changed) {
     changed = false;
@@ -967,7 +1515,7 @@ void KernelRecovery::typeAccumulators() {
   // invalid one, so their only users are pad phis of invalid groups)
   std::set<PHINode*> keep;
   for (auto& g : groups) if (g->isPhi && g->valid) for (Value* v : g->vals) if (auto* pn = dyn_cast<PHINode>(v)) keep.insert(pn);
-  for (PHINode* pn : padPhis) if (!keep.count(pn)) { pn->replaceAllUsesWith(PoisonValue::get(f32)); pn->eraseFromParent(); }
+  for (PHINode* pn : padPhis) if (!keep.count(pn)) { pn->replaceAllUsesWith(PoisonValue::get(pn->getType())); pn->eraseFromParent(); }
   for (auto& op : ops) {
     op->cIsSlots = allZero(op->cList) || listSource(op->cList) != nullptr;
     // a slot-typed C bundle carries its padding slots too: the source's value at the position (zero stays zero)
@@ -988,10 +1536,11 @@ static FunctionCallee declare(Module& M, const std::string& name, Type* ret, Arr
 void KernelRecovery::rewrite() {
   Module& M = *F.getParent();
   LLVMContext& C = F.getContext();
-  Type* i32 = Type::getInt32Ty(C); Type* f32 = Type::getFloatTy(C);
+  Type* i32 = Type::getInt32Ty(C); Type* i64 = Type::getInt64Ty(C);
   StructType* ld4 = StructType::get(C, {i32, i32, i32, i32});
   auto cst = [&](int v) { return ConstantInt::get(i32, v); };
-  auto floatStruct = [&](int n) { std::vector<Type*> t(n, f32); return StructType::get(C, t); };
+  auto accStruct = [&](int n, Type* ty) { std::vector<Type*> t(n, ty); return StructType::get(C, t); };
+  auto accSuffix = [&](Type* ty) { return std::string(ty->isIntegerTy() ? "_i32" : ""); };
 
   // 1. ldmatrix -> __mvcc_tp_ld(addr, kind, trans, blockmap) : {i32 x 4} words in slot order
   // in discovery order (the ops', then their sources'), not by address: the order decides where the fills are
@@ -1002,7 +1551,7 @@ void KernelRecovery::rewrite() {
   FunctionCallee ldFn = declare(M, "__mvcc_tp_ld", ld4, {i32, i32, i32, i32});
   FunctionCallee f2s = declare(M, "__mvcc_tp_frag2slot", ld4, {i32, i32, i32, i32, i32});
   for (LdRec* ld : usedLds) {
-    if (!ld->reg) continue;
+    if (!ld->reg || ld->devUsed) continue;
     IRBuilder<> B(ld->firstUse->CI);
     CallInst* nc = B.CreateCall(f2s, {cst(ld->kind), ld->regWords[0], ld->regWords[1], ld->regWords[2], ld->regWords[3]});
     nc->setDebugLoc(ld->firstUse->CI->getDebugLoc());
@@ -1079,7 +1628,7 @@ void KernelRecovery::rewrite() {
   }
 
   // 2. fused ops (C operands are placeholders = the old values; patched in step 3)
-  auto cArgBase = [&](FusedOp* op) { return 6 + (op->M * op->K + op->K * op->N) / 64; };
+  auto cArgBase = [&](FusedOp* op) { return op->dev ? 8 : 6 + (op->M * op->K + op->K * op->N) / 64; };
   std::map<FusedOp*, CallInst*> ptx2accOf;
   for (auto& op : ops) {
     const int MTL = (int)op->m.size(), NTL = (int)op->m[0].size(), LV = (int)op->m[0][0].size();
@@ -1087,14 +1636,44 @@ void KernelRecovery::rewrite() {
     const int nA = op->M * op->K / 64, nB = op->K * op->N / 64;  // 32-bit words per lane
     IRBuilder<> B(op->lastMma->CI);
     std::vector<Value*> cVals = op->cList;
-    for (Value*& v : cVals) if (!v) v = ConstantFP::get(f32, 0.0);   // padding positions of a solo B block
+    for (Value*& v : cVals) if (!v) v = Constant::getNullValue(op->accTy);   // padding positions of a solo B block
     if (!op->cIsSlots) {
-      std::vector<Type*> at(2, i32); for (int i = 0; i < cap; i++) at.push_back(f32);
-      FunctionCallee cv = declare(M, "__mvcc_tp_ptx2acc_" + std::to_string(cap), floatStruct(cap), at);
+      std::vector<Type*> at(2, i32); for (int i = 0; i < cap; i++) at.push_back(op->accTy);
+      FunctionCallee cv = declare(M, "__mvcc_tp_ptx2acc_" + std::to_string(cap) + accSuffix(op->accTy), accStruct(cap, op->accTy), at);
       std::vector<Value*> args = {cst(op->M), cst(op->N)}; args.insert(args.end(), cVals.begin(), cVals.end());
       CallInst* cc = B.CreateCall(cv, args);
       ptx2accOf[op.get()] = cc;
       for (int p = 0; p < cap; p++) cVals[p] = B.CreateExtractValue(cc, p);
+    }
+    int fused = 0; for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) fused += m != nullptr;
+    const std::string shape = op->type >= 2 ? "m16n8k32" : "m16n8k16";
+    if (op->dev) {
+      // {acc xC} __mvcc_tp_mmad_MxNxK(M,N,K, type | aShared << 4 | bShared << 5, aPtr, bPtr, lda, ldb, c...): the
+      // matmul reads both tiles from memory. The row pitches are computed here when the proof's pitch is one
+      // expression of values available at the op for every warp (-1: the helper derives origin and pitch from
+      // lanes 0 and 4)
+      auto pitch = [&](LdRec* l) -> Value* {
+        for (auto& p : l->devLd) if (!samePoly(p, l->devLd[0])) return cst(-1);
+        Value* v = devEval->materialize(l->devLd[0], op->lastMma->CI, DT);
+        return v ? v : cst(-1);
+      };
+      Value* lda = pitch(op->m[0][0][0]->aSrc[0]);
+      Value* ldb = pitch(op->m[0][0][0]->bSrc[0]);
+      std::vector<Type*> at = {i32, i32, i32, i32, i64, i64, i32, i32}; for (int i = 0; i < cap; i++) at.push_back(op->accTy);
+      std::string nm = "__mvcc_tp_mmad_" + std::to_string(op->M) + "x" + std::to_string(op->N) + "x" + std::to_string(op->K) + accSuffix(op->accTy);
+      FunctionCallee mf = declare(M, nm, accStruct(cap, op->accTy), at);
+      const int flags = op->type | (op->aShared ? 16 : 0) | (op->bShared ? 32 : 0);
+      std::vector<Value*> args = {cst(op->M), cst(op->N), cst(op->K), cst(flags), B.CreatePtrToInt(op->aPtr, i64), B.CreatePtrToInt(op->bPtr, i64), lda, ldb};
+      args.insert(args.end(), cVals.begin(), cVals.end());
+      op->newCall = B.CreateCall(mf, args);
+      op->newCall->setDebugLoc(op->lastMma->CI->getDebugLoc());
+      for (int p = 0; p < cap; p++) op->newD.push_back(B.CreateExtractValue(op->newCall, p));
+      TpDescriptor d; d.M = op->M; d.N = op->N; d.K = op->K; d.tl = false; d.tr = true; d.type = op->type; d.dev = true;
+      d.aShared = op->aShared; d.bShared = op->bShared;
+      res.descriptors.insert(d);
+      const char* from = op->aShared ? (op->bShared ? "shared memory" : "shared and device memory") : (op->bShared ? "device and shared memory" : "device memory");
+      note("fused " + std::to_string(fused) + " mma.sync." + shape + " into matmul2d " + d.tag() + " reading A and B from " + from + (op->cIsSlots ? "" : " (accumulator enters in fragment layout: PTX->slot conversion inserted)"));
+      continue;
     }
     // operand words: sub-blocks (16x16 per ldmatrix) ordered by the slot-bit assignment of the fused tile
     auto wordsOf = [&](MmaRec* m, bool isA) {
@@ -1123,9 +1702,9 @@ void KernelRecovery::rewrite() {
     for (auto& s : subA) aWords.insert(aWords.end(), s.begin(), s.end());
     for (auto& s : subB) bWords.insert(bWords.end(), s.begin(), s.end());
     if ((int)aWords.size() != nA || (int)bWords.size() != nB) { warn("internal: operand word count mismatch"); continue; }
-    std::vector<Type*> at(6, i32); for (int i = 0; i < nA + nB; i++) at.push_back(i32); for (int i = 0; i < cap; i++) at.push_back(f32);
+    std::vector<Type*> at(6, i32); for (int i = 0; i < nA + nB; i++) at.push_back(i32); for (int i = 0; i < cap; i++) at.push_back(op->accTy);
     std::string nm = "__mvcc_tp_mma_" + std::to_string(op->M) + "x" + std::to_string(op->N) + "x" + std::to_string(op->K);
-    FunctionCallee mf = declare(M, nm, floatStruct(cap), at);
+    FunctionCallee mf = declare(M, nm, accStruct(cap, op->accTy), at);
     std::vector<Value*> args = {cst(op->M), cst(op->N), cst(op->K), cst(op->type), cst(op->tl), cst(op->tr)};
     args.insert(args.end(), aWords.begin(), aWords.end()); args.insert(args.end(), bWords.begin(), bWords.end()); args.insert(args.end(), cVals.begin(), cVals.end());
     op->newCall = B.CreateCall(mf, args);
@@ -1133,8 +1712,7 @@ void KernelRecovery::rewrite() {
     for (int p = 0; p < cap; p++) op->newD.push_back(B.CreateExtractValue(op->newCall, p));
     TpDescriptor d; d.M = op->M; d.N = op->N; d.K = op->K; d.tl = op->tl; d.tr = op->tr; d.type = op->type;
     res.descriptors.insert(d);
-    int fused = 0; for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) fused += m != nullptr;
-    note("fused " + std::to_string(fused) + " mma.sync.m16n8k16 into matmul2d " + d.tag() + (op->cIsSlots ? "" : " (accumulator enters in fragment layout: PTX->slot conversion inserted)"));
+    note("fused " + std::to_string(fused) + " mma.sync." + shape + " into matmul2d " + d.tag() + (op->cIsSlots ? "" : " (accumulator enters in fragment layout: PTX->slot conversion inserted)"));
   }
 
   // 3. wire slot-typed values: internal consumers take the slot values, everything else a PTX-layout conversion
@@ -1177,10 +1755,10 @@ void KernelRecovery::rewrite() {
     if (g->isPhi) { ip = &*g->phiBlock->getFirstNonPHIIt(); for (int p = 0; p < cap; p++) vals[p] = g->vals[p]; }
     else { ip = cast<Instruction>(g->op->newD.back())->getNextNode(); for (int p = 0; p < cap; p++) vals[p] = g->op->newD[p]; }
     if (atBB) ip = &*atBB->getFirstNonPHIIt();
-    for (Value*& v : vals) if (!v) v = ConstantFP::get(f32, 0.0);   // padding positions of a solo B block
+    for (Value*& v : vals) if (!v) v = Constant::getNullValue(g->accTy);   // padding positions of a solo B block
     IRBuilder<> B(ip);
-    std::vector<Type*> at(2, i32); for (int i = 0; i < cap; i++) at.push_back(f32);
-    FunctionCallee cv = declare(M, "__mvcc_tp_acc2ptx_" + std::to_string(cap), floatStruct(cap), at);
+    std::vector<Type*> at(2, i32); for (int i = 0; i < cap; i++) at.push_back(g->accTy);
+    FunctionCallee cv = declare(M, "__mvcc_tp_acc2ptx_" + std::to_string(cap) + accSuffix(g->accTy), accStruct(cap, g->accTy), at);
     std::vector<Value*> args = {cst(g->M), cst(g->N)}; args.insert(args.end(), vals.begin(), vals.end());
     CallInst* cc = B.CreateCall(cv, args);
     std::vector<Value*> out(cap);
@@ -1224,11 +1802,16 @@ void KernelRecovery::rewrite() {
   // 4. delete old mmas (all levels) and their extracts
   std::vector<MmaRec*> dead;
   for (auto& op : ops) if (op->newCall) for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) dead.push_back(m);
-  for (MmaRec* m : dead) for (int r = 0; r < 4; r++) if (m->d[r]) { if (!m->d[r]->use_empty()) m->d[r]->replaceAllUsesWith(PoisonValue::get(f32)); m->d[r]->eraseFromParent(); }
+  for (MmaRec* m : dead) for (int r = 0; r < 4; r++) if (m->d[r]) { if (!m->d[r]->use_empty()) m->d[r]->replaceAllUsesWith(PoisonValue::get(m->d[r]->getType())); m->d[r]->eraseFromParent(); }
+  // the fragment loads of device-operand blocks (the matmul reads the tile itself) die with their mmas
+  SmallVector<WeakTrackingVH, 64> deadLoads;
+  { std::set<Value*> seen;
+    for (MmaRec* m : dead) for (LdRec* l : {m->aSrc[0], m->bSrc[0]}) if (l->devUsed) for (Value* w : l->regWords) if (seen.insert(w).second) deadLoads.push_back(w); }
   for (MmaRec* m : dead) m->CI->eraseFromParent();
+  RecursivelyDeleteTriviallyDeadInstructionsPermissive(deadLoads);
   // the padding stand-ins were replaced by the fused calls' extracts (step 3); an op that was not rewritten leaves
   // its stand-ins poison, which is what its padding slots are
-  for (Instruction* ph : padVals) { if (!ph->use_empty()) ph->replaceAllUsesWith(PoisonValue::get(f32)); ph->eraseFromParent(); }
+  for (Instruction* ph : padVals) { if (!ph->use_empty()) ph->replaceAllUsesWith(PoisonValue::get(ph->getType())); ph->eraseFromParent(); }
 }
 
 // mma.sync.m16n8k32 with e4m3/e5m2 inputs -> widen every register to two half pairs and issue two m16n8k16 f16 mmas.
@@ -1309,6 +1892,7 @@ bool KernelRecovery::run() {
   analyzeChains();
   analyzeOperands();
   pairMmas();
+  proveDeviceBlocks();
   buildGrids();
   validateFixpoint();
   if (ops.empty()) {

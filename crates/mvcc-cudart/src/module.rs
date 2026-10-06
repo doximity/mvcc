@@ -77,6 +77,9 @@ pub struct VerifyKernelAbi {
     pub tr: bool,
     #[serde(rename = "type")]
     pub ty: String,
+    /// The matmul reads A and B from device memory (`__mvcc_tp_mmad`) rather than from cooperative slots.
+    #[serde(default)]
+    pub dev: bool,
 }
 #[derive(Deserialize, Debug, Clone)]
 pub struct GlobalSymbolAbi { pub name: String, pub offset: u32, pub size: u32 }
@@ -381,6 +384,58 @@ impl Module {
         for v in &verifies {
             let (m, n, k) = (v.m as usize, v.n as usize, v.k as usize);
             let cap = m * n / 32;
+            if v.dev {
+                // device operands: A [m][k] and B [n][k] (k contiguous) at a row pitch of k + 16 elements; the padding
+                // holds 7s, which would show up in the product if the matmul read past k
+                let int = v.ty == "s8" || v.ty == "u8";
+                let (ld, esz) = (k + 16, if int { 1 } else { 2 });
+                let mut seed: u32 = 0x85ebca6b ^ ((m * 131 + n * 17 + k) as u32);
+                let mut next = || { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; ((seed >> 8) % 9) as i32 - 4 + if v.ty == "u8" { 4 } else { 0 } };
+                let a: Vec<i32> = (0..m * k).map(|_| next()).collect();
+                let b: Vec<i32> = (0..n * k).map(|_| next()).collect();
+                let put = |buf: &mut [u8], idx: usize, x: i32| {
+                    if int { buf[idx] = x as u8; }
+                    else {
+                        let h = if v.ty == "bf16" { ((x as f32).to_bits() >> 16) as u16 } else { f16_bits(x as f32) };
+                        buf[2 * idx..2 * idx + 2].copy_from_slice(&h.to_le_bytes());
+                    }
+                };
+                let mut am = vec![0u8; m * ld * esz];
+                let mut bm = vec![0u8; n * ld * esz];
+                for i in 0..m { for j in 0..ld { put(&mut am, i * ld + j, if j < k { a[i * k + j] } else { 7 }); } }
+                for i in 0..n { for j in 0..ld { put(&mut bm, i * ld + j, if j < k { b[i * k + j] } else { 7 }); } }
+                let ab = dev.new_buffer(am.len() as u64).ok_or("buffer")?;
+                let bb = dev.new_buffer(bm.len() as u64).ok_or("buffer")?;
+                let ob = dev.new_buffer(((32 * cap + 32) * 4) as u64).ok_or("buffer")?;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(am.as_ptr(), ab.contents(), am.len());
+                    std::ptr::copy_nonoverlapping(bm.as_ptr(), bb.contents(), bm.len());
+                    std::ptr::write_bytes(ob.contents(), 0xff, (32 * cap + 32) * 4);
+                }
+                let ps = dev.new_pipeline(lib, &v.name, 32, None).map_err(|e| format!("{}: {}", v.name, e))?;
+                let cb = queue.new_cmdbuf();
+                let e = cb.compute();
+                e.set_pipeline(&ps); e.set_buffer(&ab, 0, 0); e.set_buffer(&bb, 0, 1); e.set_buffer(&ob, 0, 2);
+                e.dispatch([1, 1, 1], [32, 1, 1]);
+                e.end();
+                cb.commit();
+                cb.wait_completed();
+                if let Some(err) = cb.error() { return Err(format!("{}: {}", v.name, err)); }
+                let out: Vec<u32> = unsafe { std::slice::from_raw_parts(ob.contents() as *const u32, 32 * cap + 32).to_vec() };
+                let as_num = |x: u32| -> f64 { if int { x as i32 as f64 } else { f32::from_bits(x) as f64 } };
+                let mut bad = 0usize; let mut first = String::new();
+                for lane in 0..32usize { for p in 0..cap {
+                    let (tile, r) = (p / 4, p % 4); let (mt, nt) = (tile / (n / 8), tile % (n / 8));
+                    let mm = 16 * mt + (lane >> 2) + 8 * (r >> 1); let nn = 8 * nt + 2 * (lane & 3) + (r & 1);
+                    let mut acc = 0i64; for kk in 0..k { acc += (a[mm * k + kk] * b[nn * k + kk]) as i64; }
+                    let got = as_num(out[lane * cap + p]);
+                    if got != acc as f64 { bad += 1; if first.is_empty() { first = format!("lane {} reg {} (D[{}][{}]) = {} expected {}", lane, p, mm, nn, got, acc); } }
+                } }
+                let rt: f64 = out[32 * cap..32 * cap + 32].iter().map(|&x| as_num(x)).sum();
+                if bad > 0 { return Err(format!("{}: {} of {} fragment values wrong; first: {}", v.name, bad, 32 * cap, first)); }
+                if rt != 0.0 { return Err(format!("{}: slot<->fragment conversion round trip differs in {} values", v.name, rt)); }
+                continue;
+            }
             // deterministic small integers, exactly representable in f16 and bf16 and summing exactly in f32
             let mut seed: u32 = 0x9e3779b9 ^ ((m * 131 + n * 17 + k) as u32);
             let mut next = || { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; ((seed >> 8) % 9) as i32 - 4 };

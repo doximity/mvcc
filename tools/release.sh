@@ -54,6 +54,8 @@ v["mvcc"]["built_on_macos"] = host
 json.dump(v, open(p, "w"), indent=2); open(p, "a").write("\n")
 EOF
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$STAGE/$NAME/"
+mkdir -p "$STAGE/$NAME/tools"
+cp "$ROOT/tools/install_prefix.sh" "$STAGE/$NAME/tools/"
 LLVM_LICENSE="$(brew --prefix llvm)/LICENSE.TXT"
 [ -f "$LLVM_LICENSE" ] || { echo "release: $LLVM_LICENSE not found (LLVM's license must ship with mvcc-ir2msl)" >&2; exit 1; }
 cp "$LLVM_LICENSE" "$STAGE/$NAME/LICENSE-LLVM.txt"
