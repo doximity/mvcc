@@ -5,11 +5,14 @@ fn main() {
     println!("cargo:rerun-if-changed=../../cpp/mvcc-metal/mvcc_metal.h");
     println!("cargo:rerun-if-changed=../../cpp/mvcc-metal/mvcc_props.cpp");
     println!("cargo:rerun-if-changed=../../cpp/mvcc-metal/mvcc_autolink.s");
+    println!("cargo:rerun-if-changed=../../cpp/mvcc-metal/curand_host.cpp");
     println!("cargo:rerun-if-changed=../../include/driver_types.h");
+    println!("cargo:rerun-if-changed=../../include/curand_kernel.h");
     cc::Build::new()
         .file("../../cpp/mvcc-metal/mvcc_metal.mm")
         .file("../../cpp/mvcc-metal/mvcc_props.cpp")
         .file("../../cpp/mvcc-metal/mvcc_autolink.s")
+        .file("../../cpp/mvcc-metal/curand_host.cpp")
         .include("../../include")
         .flag("-fobjc-arc")
         .flag("-mmacosx-version-min=26.0")

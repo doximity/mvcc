@@ -57,11 +57,18 @@ elif [ -x "$ROOT/build/mvcc-prelude-test" ]; then
 else bad "prelude_test binary missing (run without --no-build)"; fi
 
 step "kernel tests (nvcc -> run)"
-for t in vector_add stream_order intrinsics warp_tile ranks device_graph_tail coherence shard_sched printf_shared globaltimer single_thread_order free_returns; do
+for t in vector_add stream_order intrinsics warp_tile ranks device_graph_tail coherence shard_sched printf_shared globaltimer single_thread_order free_returns curand_philox; do
   if nvcc -O2 -std=c++17 -o "$OUT/$t" "$ROOT/tests/kernels/$t.cu" >"$OUT/$t.build.log" 2>&1; then
     if [ "$HOST" = 1 ]; then ok "$t: compile"; else run "$t" "$OUT/$t"; fi
   else bad "$t: compile (see $OUT/$t.build.log)"; fi
 done
+step "install prefix (Homebrew layout)"
+PREFIX="$OUT/prefix"
+rm -rf "$PREFIX"
+if "$ROOT/tools/install_prefix.sh" "$PREFIX" >"$OUT/prefix.log" 2>&1 \
+    && "$PREFIX/bin/nvcc" -O2 -std=c++17 -o "$OUT/prefix_curand" "$ROOT/tests/kernels/curand_philox.cu" >>"$OUT/prefix.log" 2>&1; then
+  if [ "$HOST" = 1 ]; then ok "install_prefix: nvcc"; else run install-prefix "$OUT/prefix_curand"; fi
+else bad "install_prefix (see $OUT/prefix.log)"; fi
 if nvcc -O3 -std=c++17 -c -o "$OUT/structured_spin.o" "$ROOT/tests/kernels/structured_spin.cu" \
     >"$OUT/structured_spin.build.log" 2>&1; then
   if grep -q 'structured emission failed' "$OUT/structured_spin.build.log"; then
@@ -83,24 +90,36 @@ n=$(wc -l "$ROOT"/cpp/mvcc-llvm/{stir,schedule,legality,engine,tensor_recovery,e
 if [ "$n" -le 9000 ]; then ok "tensor recovery sources: $n lines (budget 9000)";
 else bad "tensor recovery sources: $n lines, over the 9000-line budget"; fi
 
+# Recovered kernels are required on M5 and later GPUs; earlier ones may fail the cooperative-tensor layout
+# verification, and then the runtime runs the exact twins.
+chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null); gen=0
+[[ $chip =~ ^Apple\ M([0-9]+) ]] && gen=${BASH_REMATCH[1]}
+tensor_runs() { # tensor_runs <name>: $OUT/<name> vs CPU on its recovered kernels, then on the exact twins
+  local t="$1"
+  if [ "$HOST" = 1 ]; then printf '  [skip] %s recovered/exact-twins (--host: no GPU)\n' "$t"; return; fi
+  if ! MVCC_TENSOR_DIAG=1 "$OUT/$t" >"$OUT/$t.log" 2>&1; then bad "$t recovered (see $OUT/$t.log)"
+  elif grep -q 'recovered kernels enabled' "$OUT/$t.log"; then ok "$t recovered vs CPU (layout verified on device)"
+  elif [ "$gen" -lt 5 ] && grep -q 'using exact kernels' "$OUT/$t.log"; then ok "$t vs CPU on exact kernels (${chip:-unknown chip}; recovered kernels are checked on M5 and later)"
+  else bad "$t recovered (see $OUT/$t.log)"; fi
+  run "$t-exact-twins" env MVCC_TENSOR_EXACT=1 "$OUT/$t"
+}
 if MVCC_TENSOR_DIAG=1 nvcc -O2 -std=c++17 -o "$OUT/gemm_ptx" "$ROOT/tests/kernels/gemm_ptx.cu" >"$OUT/gemm_ptx.build.log" 2>&1; then
   if grep -q 'mma.sync recognized but not recovered' "$OUT/gemm_ptx.build.log"; then bad "gemm_ptx: a kernel was not recovered (see $OUT/gemm_ptx.build.log)"; else ok "gemm_ptx: all mma.sync kernels recovered"; fi
   if grep -q 'check+emit: tensor-op legality: ok' "$OUT/gemm_ptx.build.log"; then ok "gemm_ptx: check+emit tensor-op (L1–L10)";
   else bad "gemm_ptx: recovered GEMM was not admitted through check+emit (see $OUT/gemm_ptx.build.log)"; fi
-  if [ "$HOST" = 1 ]; then
-    printf '  [skip] gemm_ptx recovered/exact-twins (--host: no GPU)\n'
-  else
-    # Recovered kernels are required on M5 and later GPUs; earlier ones may fail the cooperative-tensor layout
-    # verification, and then the runtime runs the exact twins.
-    chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null); gen=0
-    [[ $chip =~ ^Apple\ M([0-9]+) ]] && gen=${BASH_REMATCH[1]}
-    if ! MVCC_TENSOR_DIAG=1 "$OUT/gemm_ptx" >"$OUT/gemm_ptx.log" 2>&1; then bad "gemm_ptx recovered (see $OUT/gemm_ptx.log)"
-    elif grep -q 'recovered kernels enabled' "$OUT/gemm_ptx.log"; then ok "gemm_ptx recovered vs CPU (layout verified on device)"
-    elif [ "$gen" -lt 5 ] && grep -q 'using exact kernels' "$OUT/gemm_ptx.log"; then ok "gemm_ptx vs CPU on exact kernels (${chip:-unknown chip}; recovered kernels are checked on M5 and later)"
-    else bad "gemm_ptx recovered (see $OUT/gemm_ptx.log)"; fi
-    run gemm_ptx-exact-twins env MVCC_TENSOR_EXACT=1 "$OUT/gemm_ptx"
-  fi
+  tensor_runs gemm_ptx
 else bad "gemm_ptx: compile (see $OUT/gemm_ptx.build.log)"; fi
+# Fragments as plain 32-bit loads from device memory or a shared tile at per-warp origins (bf16 and s8 GEMMs, and an
+# attention-shaped kernel whose pointers are fields of a by-value struct): each must become a matmul2d op that reads
+# its tiles from memory.
+if MVCC_TENSOR_DIAG=1 nvcc -O2 -std=c++17 -o "$OUT/gemm_dev" "$ROOT/tests/kernels/gemm_dev.cu" >"$OUT/gemm_dev.build.log" 2>&1; then
+  for op in bfloat_32x32x128_tl0_tr1_dev int8_t_32x32x128_tl0_tr1_dev bfloat_32x32x64_tl0_tr1_dev bfloat_32x32x32_tl0_tr1_dev_tgA; do
+    if grep -q "into matmul2d $op reading" "$OUT/gemm_dev.build.log"; then ok "gemm_dev: $op recovered";
+    else bad "gemm_dev: $op not recovered (see $OUT/gemm_dev.build.log)"; fi
+  done
+  if grep -q 'stays a register fragment\|recognized but not recovered' "$OUT/gemm_dev.build.log"; then bad "gemm_dev: a fragment was not read from memory (see $OUT/gemm_dev.build.log)"; fi
+  tensor_runs gemm_dev
+else bad "gemm_dev: compile (see $OUT/gemm_dev.build.log)"; fi
 step "semantic iteration graph, coordinate discovery, STIR (golden)"
 # the SIG summary, the discovered coordinates and the STIR text of every kernel in the corpus must match
 # tests/stir/*.golden exactly (loop classes, recurrence algebras and permissions, fitted sites, round-trip counts).

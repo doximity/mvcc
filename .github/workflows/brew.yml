@@ -1,0 +1,90 @@
+name: brew formula
+
+# After a GitHub release is published with the tools/release.sh asset
+# mvcc-<version>-macos-arm64.tar.gz on tag v<version>, fill Formula/cuda-mvcc.rb
+# and open a pull request. The tag is passed only through the environment and must
+# match vX.Y.Z so it cannot inject shell or Ruby into the formula.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, including the leading v (v1.0.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  formula:
+    if: github.repository == 'doximity/mvcc'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: download the release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG:-}"
+          if [ -z "$tag" ]; then tag="${INPUT_TAG:-}"; fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "refusing tag that is not vX.Y.Z or vX.Y.Z-rc.N" >&2
+            exit 1
+          fi
+          ver="${tag#v}"
+          asset="mvcc-${ver}-macos-arm64.tar.gz"
+          mkdir -p dist
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir dist
+          if [ ! -f "dist/$asset" ]; then
+            echo "release $tag did not contain $asset" >&2
+            exit 1
+          fi
+          # A second asset must not be fed to the formula script via a glob.
+          count="$(find dist -maxdepth 1 -type f -name 'mvcc-*-macos-arm64.tar.gz' | wc -l | tr -d ' ')"
+          if [ "$count" != 1 ]; then
+            echo "expected one tarball, found $count" >&2
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - name: write the formula checksum
+        run: python3 tools/update_brew_formula.py "dist/$ASSET"
+
+      - name: open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "refusing TAG" >&2
+            exit 1
+          fi
+          if git diff --quiet -- Formula/cuda-mvcc.rb; then
+            echo "formula already matches ${TAG}"
+            exit 0
+          fi
+          branch="brew/formula-${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add Formula/cuda-mvcc.rb
+          git commit -m "cuda-mvcc formula for ${TAG}"
+          git push -u origin "$branch"
+          gh pr create --base master --head "$branch" --title "cuda-mvcc formula for ${TAG}" --body "$(cat <<EOF
+          ## Summary
+          - Point the \`cuda-mvcc\` Homebrew formula at the \`${TAG}\` release asset and its sha256.
+
+          ## Test plan
+          - [ ] \`brew tap doximity/mvcc https://github.com/doximity/mvcc\`
+          - [ ] \`brew install cuda-mvcc\`
+          - [ ] \`nvcc --version\` and a small \`curand_kernel.h\` program
+          EOF
+          )"
