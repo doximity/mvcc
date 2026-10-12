@@ -55,7 +55,8 @@ struct VerifyKernelABI {
   std::string name;              // __mvcc_tp_verify_<tag>
   int M = 0, N = 0, K = 0;
   bool tl = false, tr = false;
-  int type = 0;                  // 0 f16, 1 bf16
+  int type = 0;                  // 0 f16, 1 bf16, 2 s8, 3 u8
+  bool dev = false;              // device-memory operands (__mvcc_tp_mmad)
 };
 
 struct EmitOptions {

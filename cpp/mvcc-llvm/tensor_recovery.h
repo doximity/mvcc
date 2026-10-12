@@ -15,19 +15,25 @@ namespace mvcc {
 struct TpDescriptor {
   int M = 0, N = 0, K = 0;
   bool tl = false, tr = false;  // matmul2d transpose flags (left = A stored [k][m]; right = B stored [n][k])
-  int type = 0;                 // 0 = f16, 1 = bf16
+  int type = 0;                 // 0 = f16, 1 = bf16, 2 = s8, 3 = u8 (int32 accumulate)
+  bool dev = false;             // operands are memory tensors rather than cooperative slots
+  bool aShared = false, bShared = false;  // dev: that operand is a threadgroup-memory tensor
   bool operator<(const TpDescriptor& o) const {
-    return std::tie(M, N, K, tl, tr, type) < std::tie(o.M, o.N, o.K, o.tl, o.tr, o.type);
+    return std::tie(M, N, K, tl, tr, type, dev, aShared, bShared) <
+           std::tie(o.M, o.N, o.K, o.tl, o.tr, o.type, o.dev, o.aShared, o.bShared);
   }
-  std::string mslType() const { return type == 0 ? "half" : "bfloat"; }
-  std::string tag() const;  // "half_32x32x32_tl0_tr1"
+  bool integer() const { return type >= 2; }
+  std::string mslType() const { return type == 0 ? "half" : type == 1 ? "bfloat" : type == 2 ? "int8_t" : "uint8_t"; }
+  std::string accType() const { return integer() ? "int32_t" : "float"; }
+  std::string abiType() const { return type == 0 ? "f16" : type == 1 ? "bf16" : type == 2 ? "s8" : "u8"; }
+  std::string tag() const;  // "half_32x32x32_tl0_tr1", "int8_t_32x32x128_tl0_tr1_dev", "bfloat_32x32x32_tl0_tr1_dev_tgA"
 };
 
 struct TensorRecoveryOptions {
   bool enabled = true;
   bool verbose = false;  // per-kernel notes on stderr (MVCC_TENSOR_DIAG=1 or -v)
-  // Fusion caps in 16-blocks per matmul2d along M, N, K (1 or 2; 0 = heuristic).
-  // MVCC_TP_GROUPS=m,n,k overrides.
+  // Fusion caps in 16-blocks per matmul2d along M, N (1 or 2) and in k-steps along K (1 or 2 for cooperative
+  // operands, up to a K of 128 for device operands; 0 = heuristic). MVCC_TP_GROUPS=m,n,k overrides.
   int groupM = 2, groupN = 2, groupK = 0;
 };
 

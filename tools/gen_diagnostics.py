@@ -90,6 +90,7 @@ GUIDANCE = {
     # ---- emitter: mvcc builtins
     "__mvcc_tile_mma: ": "`mvcc::warp_tile` misuse: the accumulator must be a register array and the operands device or shared pointers (`include/mvcc/tile.cuh`).",
     "__mvcc_tp_mma: bad arity": "Internal (tensor recovery emitted a malformed op); report with the `.ll`.",
+    "__mvcc_tp_mmad: bad arity": "Internal (tensor recovery emitted a malformed op reading its tiles from memory); report with the `.ll`.",
     "__mvcc_tp_ctstore: bad arity": "Internal (epilogue recovery emitted a cooperative store with the wrong value count); report with the `.ll`.",
     "unknown tensor recovery builtin ": "Internal; report.",
     "internal: ": "Internal invariant violated; report with the `.ll` (`MVCC_KEEP=1`).",
@@ -115,7 +116,7 @@ GUIDANCE = {
     "ldmatrix fields feed different A blocks in different mmas": "Inconsistent fragment use across K steps; exact lowering runs.",
     "ldmatrix fields feed different B blocks in different mma pairs": "Inconsistent B fragment use across K steps; exact lowering runs.",
     "mma result used other than by single extractvalue per field": "The accumulator is inspected mid-chain (e.g. per-step scaling). Exact lowering runs.",
-    "mma variant ": "Only `m16n8k16` f16/bf16 -> f32 is recovered.",
+    "mma variant ": "Recovered: `m16n8k16` f16/bf16 -> f32 and `m16n8k32` s8/u8 -> s32 (wrapping, no `.satfinite`).",
     "no partner mma shares A and the other half of the B ldmatrix": "Recovery needs n8 pairs to form 16-wide blocks; a lone n8 tile is left exact.",
     "register-built block is shared by mma batches none of which dominates the others": "A register-built operand block (e.g. attention P) feeds `mma` batches on divergent paths, so no single point can host its recovered fill. Exact lowering runs for those batches.",
     "unexpected mma operand count": "Malformed `mma`; the exact lowering will also reject it.",
@@ -123,6 +124,7 @@ GUIDANCE = {
     "no input files": "Usage error.",
     "-o cannot be used with multiple input files in -c mode": "nvcc rule.",
     "could not rewrite the __shared__ declaration of '": "clang rejects `__shared__ T x;` when `T` has default member initializers; nvcc accepts it and does not run them (shared memory is uninitialized). The driver rewrites each such declaration and did not recognize this one's form (several declarators, an initializer, or a declaration split across lines). Declare the variable alone on one line as `__shared__ T name;` or `__shared__ T name[N];`, or drop the member initializers.",
+    "refusing library path '": "A `-L` directory contains '@' or ',', which the host linker would read as an rpath token or an option separator. Pass a path without them (a symlink works).",
     "generated Metal for ": "The MSL the compiler produced did not compile with Metal. This is a compiler bug: `MVCC_KEEP=1` keeps the `.metal`; report it with the first Metal error line.",
     # ---- runtime
     "__cudaRegisterFatBinary: bad wrapper magic": "The host object was not produced by `mvcc` (real nvcc fatbinary). Rebuild with the toolkit.",

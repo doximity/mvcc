@@ -1,6 +1,7 @@
 //! mvcc CUDA runtime (libcudart.dylib) over Metal.
 pub mod api;
 pub mod assume;
+pub mod curand;
 pub mod driver_api;
 pub mod error;
 pub mod memory;

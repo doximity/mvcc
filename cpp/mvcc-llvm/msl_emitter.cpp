@@ -56,6 +56,7 @@
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/Transforms/Scalar/LoopSimplifyCFG.h>
 #include <llvm/Transforms/Utils/LowerSwitch.h>
+#include <llvm/Transforms/Scalar/SeparateConstOffsetFromGEP.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Scalar/JumpThreading.h>
 #include <llvm/Transforms/Scalar/EarlyCSE.h>
@@ -253,6 +254,13 @@ struct MvccTTIImpl : TargetTransformInfoImplCRTPBase<MvccTTIImpl> {
     return Alignment.value() >= 4;
   }
   unsigned getLoadStoreVecRegBitWidth(unsigned) const override { return 128; }
+  // A memory access takes a base register plus an immediate offset (SeparateConstOffsetFromGEP below splits
+  // addresses into that shape).
+  bool isLegalAddressingMode(Type*, GlobalValue* BaseGV, int64_t BaseOffset, bool HasBaseReg, int64_t Scale, unsigned,
+                             Instruction* = nullptr, int64_t ScalableOffset = 0) const override {
+    return !BaseGV && !ScalableOffset && (Scale == 0 || (Scale == 1 && HasBaseReg)) && BaseOffset > -(1 << 20) &&
+           BaseOffset < (1 << 20);
+  }
 };
 
 // Decode DOT loops are `p = fmaf(w[i], a[i], p)` for i in 0..7. SLP will not break a dependent fma chain;
@@ -1116,6 +1124,11 @@ void normalizeModule(Module& M, const EmitOptions& opts, TensorRecoveryResult& t
     // vector legalization below, which InstCombine would undo
     FPM.addPass(IfConvertPureRegionsPass());
     FPM.addPass(InstCombinePass());
+    // Addresses that differ by a constant (a lane's elements of an unrolled tile) become one base plus constant
+    // offsets, which Metal folds into the access; as separate loop-invariant values each held a register across the
+    // loop (4% of a recovered attention loop, M5 Pro). No InstCombine after this: it would merge the GEPs back.
+    FPM.addPass(SeparateConstOffsetFromGEPPass());
+    FPM.addPass(EarlyCSEPass());
     // SLP / dot-pack / simd-reduce stay off: on M5 Pro Qwen decode they regressed vs scalar fma + shfl.
     // the canonicalization InstCombine above folds half extracts of a 16-byte word back into `extractelement (bitcast
     // <4 x i32> to <8 x half>)`: legalize again before anything reads the types
@@ -1778,6 +1791,7 @@ void Emitter::layoutSharedMemory(Function& Fn) {
   if (tpScratchPerSg) {
     unsigned mt = kernelMaxThreads(Fn);
     tpScratchSgs = (mt ? mt : kTpDefaultMaxThreads) / 32;
+    smemStatic = (smemStatic + 15u) & ~15u;  // the conversions' 16-byte accesses
     tpScratchOff = smemStatic;
     // Conversions sit where the dynamic object's ring is dead: scratch aliases its first bytes instead of
     // adding to the block's static shared memory.
@@ -2708,7 +2722,8 @@ void Emitter::emitTileOp(CallInst& CI, StringRef name) {
 // Tensor recovery builtins (tensor_recovery.cpp) -> prelude helpers (msl/mvcc_prelude.metal, MVCC_NEED_tp).
 //   {uint x4}  __mvcc_tp_ld(addr, kind, trans, blockmap)           operand block fill, words in slot order
 //   {float xC} __mvcc_tp_mma_MxNxK(M,N,K,type,tl,tr, a..., b..., c...) cooperative matmul2d
-//   {float xC} __mvcc_tp_acc2ptx_C(M,N, slots...) / __mvcc_tp_ptx2acc_C(M,N, ptx...)
+//   {acc xC}   __mvcc_tp_mmad_MxNxK[_i32](M,N,K,type, aPtr, bPtr, c...) matmul2d on device-memory operands
+//   {acc xC}   __mvcc_tp_acc2ptx_C[_i32](M,N, slots...) / __mvcc_tp_ptx2acc_C[_i32](M,N, ptx...)
 void Emitter::emitTpOp(CallInst& CI, StringRef name) {
   usedHelpers.insert("tp");
   auto cst = [&](unsigned i) {
@@ -2781,6 +2796,24 @@ void Emitter::emitTpOp(CallInst& CI, StringRef name) {
     line("__mvcc_tp_stage(" + sharedAddr(CI.getArgOperand(0)) + ", " + sharedAddr(CI.getArgOperand(4)) + ", " + srcE + ", " + val(CI.getArgOperand(2)) + ", " + std::to_string(cst(3)) + ");");
     return;
   }
+  if (name.starts_with("__mvcc_tp_mmad_")) {
+    const int M = cst(0), N = cst(1), K = cst(2), flags = cst(3), type = flags & 15;
+    const bool aShared = flags & 16, bShared = flags & 32;
+    unsigned cap = M * N / 32;
+    if (CI.arg_size() != 8 + cap || nOut != cap) fail("__mvcc_tp_mmad: bad arity");
+    const bool integer = type >= 2;
+    const std::string T = type == 0 ? "half" : type == 1 ? "bfloat" : type == 2 ? "int8_t" : "uint8_t", E = integer ? "int" : "float";
+    auto addr = [&](unsigned i, bool shared) { return shared ? sharedAddr(CI.getArgOperand(i)) : "(ulong)(" + val(CI.getArgOperand(i)) + ")"; };
+    std::string blk = "{ " + E + " __c[" + std::to_string(cap) + "] = {";
+    for (unsigned i = 0; i < cap; i++) blk += (i ? ", " : "") + (integer ? "(int)(" + val(CI.getArgOperand(8 + i)) + ")" : val(CI.getArgOperand(8 + i)));
+    blk += "}; " + E + " __d[" + std::to_string(cap) + "];";
+    line(blk);
+    line("  __mvcc_tp_mmad<" + T + ", " + E + ", " + std::to_string(M) + ", " + std::to_string(N) + ", " + std::to_string(K) + ", " + (aShared ? "true" : "false") + ", " + (bShared ? "true" : "false") + ">(__d, " +
+         addr(4, aShared) + ", " + addr(5, bShared) + ", " + castToSigned(CI.getArgOperand(6)) + ", " + castToSigned(CI.getArgOperand(7)) + ", __c, __lane);");
+    for (unsigned i = 0; i < cap; i++) line("  " + nm + ".f" + std::to_string(i) + " = __d[" + std::to_string(i) + "];");
+    line("}");
+    return;
+  }
   if (name.starts_with("__mvcc_tp_mma_")) {
     int M = cst(0), N = cst(1), K = cst(2), type = cst(3), tl = cst(4), tr = cst(5);
     unsigned nA = M * K / 64, nB = K * N / 64, cap = M * N / 32;
@@ -2803,12 +2836,14 @@ void Emitter::emitTpOp(CallInst& CI, StringRef name) {
     int M = cst(0), N = cst(1);
     unsigned cap = M * N / 32;
     if (CI.arg_size() != 2 + cap || nOut != cap) fail(name.str() + ": bad arity");
-    std::string blk = "{ float __in[" + std::to_string(cap) + "] = {";
-    for (unsigned i = 0; i < cap; i++) blk += (i ? ", " : "") + val(CI.getArgOperand(2 + i));
-    blk += "}; float __out[" + std::to_string(cap) + "];";
+    const bool integer = name.ends_with("_i32");
+    const std::string E = integer ? "int" : "float";
+    std::string blk = "{ " + E + " __in[" + std::to_string(cap) + "] = {";
+    for (unsigned i = 0; i < cap; i++) blk += (i ? ", " : "") + (integer ? "(int)(" + val(CI.getArgOperand(2 + i)) + ")" : val(CI.getArgOperand(2 + i)));
+    blk += "}; " + E + " __out[" + std::to_string(cap) + "];";
     line(blk);
     if (!tpScratchPerSg) fail("internal: tensor recovery conversion without scratch reservation");
-    std::string scratch = "(__MVCC_SMEM float*)(__smem + " + std::to_string(tpScratchOff) + "u + __sgid * " + std::to_string(tpScratchPerSg) + "u)";
+    std::string scratch = "(__MVCC_SMEM " + E + "*)(__smem + " + std::to_string(tpScratchOff) + "u + __sgid * " + std::to_string(tpScratchPerSg) + "u)";
     line("  " + std::string(name.starts_with("__mvcc_tp_acc2ptx_") ? "__mvcc_tp_acc2ptx" : "__mvcc_tp_ptx2acc") + "<" + std::to_string(M) + ", " + std::to_string(N) + ">(__out, __in, __lane, " + scratch + ");");
     for (unsigned i = 0; i < cap; i++) line("  " + nm + ".f" + std::to_string(i) + " = __out[" + std::to_string(i) + "];");
     line("}");
@@ -2847,11 +2882,46 @@ void Emitter::emitVerifyKernels() {
   usedHelpers.insert("tp");
   kernelsOut += "#ifndef __MVCC_SPILL\n";
   for (const TpDescriptor& d : recovery->descriptors) {
-    VerifyKernelABI v; v.name = "__mvcc_tp_verify_" + d.tag(); v.M = d.M; v.N = d.N; v.K = d.K; v.tl = d.tl; v.tr = d.tr; v.type = d.type;
+    VerifyKernelABI v; v.name = "__mvcc_tp_verify_" + d.tag(); v.M = d.M; v.N = d.N; v.K = d.K; v.tl = d.tl; v.tr = d.tr; v.type = d.type; v.dev = d.dev;
     res.verifyKernels.push_back(v);
     const std::string T = d.mslType();
     const int MB = d.M / 16, NB = d.N / 16, KB = d.K / 16, nA = d.M * d.K / 64, nB = d.K * d.N / 64, cap = d.M * d.N / 32;
     std::string k;
+    if (d.dev) {
+      // Device operands: A [M][K] and B [N][K] (k contiguous) at a row pitch of K+16 elements in device memory. Every
+      // lane passes the address of its first mma.sync fragment word (row g, column kw*t) as recovered code does, with
+      // the pitch given and (second product, which must agree) derived from lanes 0 and 4; the product goes through
+      // the slot->fragment conversion and back, as for the cooperative kernels.
+      // Shared-memory operands (aShared / bShared) are first copied, at the same pitch, into threadgroup arrays.
+      const std::string E = d.accType() == "int32_t" ? "int" : "float", cs = std::to_string(cap), ld = std::to_string(d.K + 16);
+      const std::string kw = d.integer() ? "4u" : "2u";
+      const std::string mmad = "__mvcc_tp_mmad<" + T + ", " + E + ", " + std::to_string(d.M) + ", " + std::to_string(d.N) + ", " + std::to_string(d.K) + ", " +
+                               (d.aShared ? "true" : "false") + ", " + (d.bShared ? "true" : "false") + ">";
+      k += "kernel void " + v.name + "(device const " + T + "* A [[buffer(0)]], device const " + T + "* B [[buffer(1)]], device " + E + "* out [[buffer(2)]],\n";
+      k += "    uint __lane [[thread_index_in_simdgroup]]) {\n";
+      k += "  " + E + " c[" + cs + "]; " + E + " dst[" + cs + "]; " + E + " dst2[" + cs + "]; " + E + " ptx[" + cs + "]; " + E + " back[" + cs + "];\n";
+      k += "  for (int i = 0; i < " + cs + "; i++) c[i] = 0;\n";
+      k += "  const uint g = __lane >> 2, t = __lane & 3u;\n";
+      for (int s = 0; s < 2; s++) {
+        if (!(s ? d.bShared : d.aShared)) continue;
+        const std::string n = std::to_string((s ? d.N : d.M) * (d.K + 16)), src = s ? "B" : "A";
+        k += "  threadgroup " + T + " " + src + "s[" + n + "]; for (uint i = __lane; i < " + n + "u; i += 32u) " + src + "s[i] = " + src + "[i];\n";
+      }
+      if (d.aShared || d.bShared) k += "  simdgroup_barrier(mem_flags::mem_threadgroup);\n";
+      const std::string srcA = d.aShared ? "As" : "A", srcB = d.bShared ? "Bs" : "B";
+      k += "  const ulong pa = (ulong)(" + srcA + " + g * " + ld + "u + " + kw + " * t), pb = (ulong)(" + srcB + " + g * " + ld + "u + " + kw + " * t);\n";
+      k += "  " + mmad + "(dst, pa, pb, " + ld + ", " + ld + ", c, __lane);\n";
+      k += "  " + mmad + "(dst2, pa, pb, -1, -1, c, __lane);\n";
+      k += "  threadgroup " + E + " scratch[128];\n";
+      k += "  __mvcc_tp_acc2ptx<" + std::to_string(d.M) + ", " + std::to_string(d.N) + ">(ptx, dst, __lane, scratch);\n";
+      k += "  for (int i = 0; i < " + cs + "; i++) out[__lane * " + cs + " + i] = ptx[i];\n";
+      k += "  __mvcc_tp_ptx2acc<" + std::to_string(d.M) + ", " + std::to_string(d.N) + ">(back, ptx, __lane, scratch);\n";
+      k += "  " + E + " err = 0; for (int i = 0; i < " + cs + "; i++) err += (back[i] != dst[i] ? 1 : 0) + (dst2[i] != dst[i] ? 1 : 0);\n";
+      k += "  out[32 * " + cs + " + __lane] = err;\n";
+      k += "}\n\n";
+      kernelsOut += k;
+      continue;
+    }
     k += "kernel void " + v.name + "(device const ushort* A [[buffer(0)]], device const ushort* B [[buffer(1)]], device float* out [[buffer(2)]],\n";
     k += "    uint __lane [[thread_index_in_simdgroup]]) {\n";
     // A logical [m][k]; memory rows m (k contiguous) unless tl -> rows k (m contiguous). B logical [k][n]; memory rows n

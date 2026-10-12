@@ -1,6 +1,6 @@
 # mvcc
 
-mvcc compiles and runs CUDA C++ on Apple silicon GPUs. It consists of an `nvcc`-compatible compiler that translates device code to Metal Shading Language, and a CUDA runtime (`libcudart`, `libcuda` and `libnccl`) built on Metal 4. CUDA programs and CMake projects build and run on a Mac without source changes, within the limits described under [Limitations](#limitations).
+mvcc compiles and runs CUDA C++ on Apple silicon GPUs. It consists of an `nvcc`-compatible compiler that translates device code to Metal Shading Language, and a CUDA runtime (`libcudart`, `libcuda`, `libnccl` and `libcurand`) built on Metal 4. CUDA programs and CMake projects build and run on a Mac without source changes, within the limits described under [Limitations](#limitations).
 
 No NVIDIA software is involved at build or run time. There is no CUDA toolkit, driver or `ptxas`, and no cuBLAS or other NVIDIA library.
 
@@ -12,6 +12,25 @@ No NVIDIA software is involved at build or run time. There is no CUDA toolkit, d
 - Rust, installed with [rustup](https://rustup.rs)
 
 ## Install
+
+From Homebrew, once a release has been published and `Formula/cuda-mvcc.rb` carries its checksum (`tools/update_brew_formula.py`):
+
+```bash
+brew tap doximity/mvcc https://github.com/doximity/mvcc
+brew install cuda-mvcc
+nvcc --version
+```
+
+Until that checksum is filled in, the formula is head-only and builds from source (Homebrew `llvm`, `cmake`, `ninja` and `rust`):
+
+```bash
+brew tap doximity/mvcc https://github.com/doximity/mvcc
+brew install --HEAD cuda-mvcc
+```
+
+To publish a release: `tools/release.sh`, attach `dist/mvcc-<version>-macos-arm64.tar.gz` to a GitHub release tagged `v<version>`, and let `.github/workflows/brew.yml` open the formula pull request (or run `tools/update_brew_formula.py` on that tarball yourself). The formula unpacks the toolkit into the Homebrew prefix. `libcudart`'s install name is the absolute path `$(brew --prefix cuda-mvcc)/lib64/libcudart.dylib`, so a program does not search the working directory or `@rpath` for the runtime. `nvcc` loads `mvcc-ir2msl` and `libmvcc-passes` only from that same prefix (a symlink to a tool outside it is refused). It does not pass `DYLD_*`, `CPATH`, or `LIBRARY_PATH` through to clang, and the prefix install signs the toolchain with the hardened runtime.
+
+From a clone:
 
 ```bash
 brew install llvm cmake ninja rust
@@ -53,7 +72,7 @@ The driver accepts nvcc's command line, including the options CMake generates. O
 ## Limitations
 
 - mvcc runs only on Apple silicon Macs with macOS 26. It does not bring CUDA to Intel Macs, Linux or Windows, and it does not generate code for NVIDIA GPUs.
-- It implements CUDA C++ and the CUDA runtime, not NVIDIA's libraries. Programs that use cuBLAS, cuDNN, cuFFT, cuRAND, cuSPARSE, Thrust or TensorRT do not build, so frameworks built on those libraries, such as PyTorch's CUDA backend, cannot use mvcc.
+- It implements CUDA C++ and the CUDA runtime, plus Philox4_32_10 from cuRAND (the device API in `curand_kernel.h`, and a host generator in `curand.h` / `libcurand` for that one generator). Programs that use cuBLAS, cuDNN, cuFFT, cuSPARSE, Thrust, TensorRT, or any other cuRAND generator do not build, so frameworks built on those libraries, such as PyTorch's CUDA backend, cannot use mvcc.
 - Kernels must be compiled by mvcc's `nvcc`. NVRTC is not provided, PTX and cubin files cannot be loaded at run time, and the driver API covers only devices, contexts and memory.
 - Texture and surface memory are not supported.
 - A Mac has one GPU. `MVCC_DEVICES` presents up to 16 logical devices on it, which is enough to run multi-GPU code paths and NCCL collectives but adds no compute or memory.
@@ -124,14 +143,14 @@ Behavior not listed here should match CUDA on an NVIDIA GPU. If it doesn't, plea
 
 ### Libraries
 
-NVIDIA's libraries (cuBLAS, cuDNN, cuFFT, cuRAND, Thrust and the rest) are not included. `cub/cub.cuh` provides a small subset of CUB, and `nccl.h` implements NCCL across logical devices.
+NVIDIA's libraries (cuBLAS, cuDNN, cuFFT, Thrust and the rest) are not included. `cub/cub.cuh` provides a small subset of CUB, `nccl.h` implements NCCL across logical devices, and cuRAND is Philox4_32_10 only: `curand_init`, `skipahead`, `skipahead_sequence`, `curand`, `curand4`, `curand_uniform`, `curand_uniform4`, `curand_uniform_double`, `curand_normal`, `curand_normal4` and `curand_log_normal` on `curandStatePhilox4_32_10_t`. The host API (`curandCreateGenerator` with `CURAND_RNG_PSEUDO_PHILOX4_32_10`, seed, offset, `curandGenerate` and `curandGenerateUniform`) follows that same single subsequence. `CURAND_ORDERING_PSEUDO_LEGACY` and every other generator return `CURAND_STATUS_TYPE_ERROR`. A subsequence skips 2^66 outputs, as in the cuRAND device API.
 
 ## Supported CUDA surface
 
 - Host API: 132 runtime API and 18 driver API entry points, covering device queries, memory, copies, streams, events, stream capture, host callbacks, occupancy, profiler stubs and clang's registration hooks.
 - Device code: 69 `llvm.nvvm.*` intrinsic prefixes and 118 libdevice (`__nv_*`) functions.
 - Inline PTX: 29 instructions, including `mma.sync` (10 f16, bf16, s8 and fp8 variants), `ldmatrix`, `cp.async`, `lop3`, `prmt` and `shf`.
-- Headers: `cuda_runtime.h`, `cuda.h`, `cuda_fp16.h`, `cuda_bf16.h`, `cuda_fp8.h`, `nccl.h`, `cub/cub.cuh`, `mvcc/tile.cuh` and the rest of `include/`.
+- Headers: `cuda_runtime.h`, `cuda.h`, `cuda_fp16.h`, `cuda_bf16.h`, `cuda_fp8.h`, `curand.h`, `curand_kernel.h`, `nccl.h`, `cub/cub.cuh`, `mvcc/tile.cuh` and the rest of `include/`.
 - NCCL: communicators, copy collectives, and AllReduce, Reduce and ReduceScatter (sum or average, on f32 or i32) across the logical devices set by `MVCC_DEVICES`.
 
 Anything outside this surface fails at build time: a missing host API function is a link error, and an unsupported intrinsic, libdevice function or PTX instruction is a compile error that names it. `tools/gen_surface.py` prints the complete list. `tools/gen_diagnostics.py` prints every message the compiler and runtime can produce, with advice on what to do about each one.

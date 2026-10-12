@@ -29,9 +29,10 @@ def host_api():
     out = subprocess.check_output(["nm", "-gU", DYLIB], text=True)
     syms = sorted({l.split()[-1].lstrip("_") for l in out.splitlines() if l.strip()})
     runtime = [s for s in syms if re.match(r"cuda[A-Z]", s)]
-    driver = [s for s in syms if re.match(r"cu[A-Z]", s)]
+    curand = [s for s in syms if s.startswith("curand")]
+    driver = [s for s in syms if re.match(r"cu[A-Z]", s) and not s.startswith("curand")]
     internal = [s for s in syms if s.startswith("__cuda")]
-    return runtime, driver, internal
+    return runtime, driver, curand, internal
 
 
 def device_tables():
@@ -72,7 +73,7 @@ def mma_row(v):
 
 
 def render():
-    runtime, driver, internal = host_api()
+    runtime, driver, curand, internal = host_api()
     nvvm, generic, libdevice, rejected, mnemonics, mma = device_tables()
     L = []
     w = L.append
@@ -96,6 +97,13 @@ def render():
         w("- `%s`" % s)
     w("")
     w("Registration hooks clang's host stub calls (`%s`)." % "`, `".join(internal))
+    w("")
+    w("## cuRAND host API (`libcurand.dylib`, the same library)")
+    w("")
+    w("Philox4_32_10 only (%d entry points). Other generator types return `CURAND_STATUS_TYPE_ERROR`." % len(curand))
+    w("")
+    for s in curand:
+        w("- `%s`" % s)
     w("")
     w("## Device code")
     w("")

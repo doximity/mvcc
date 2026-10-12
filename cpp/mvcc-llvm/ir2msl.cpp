@@ -159,7 +159,8 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < res.verifyKernels.size(); i++) {
         auto& v = res.verifyKernels[i];
         os << "    {\"name\": \"" << v.name << "\", \"m\": " << v.M << ", \"n\": " << v.N << ", \"k\": " << v.K << ", \"tl\": " << (v.tl ? "true" : "false")
-           << ", \"tr\": " << (v.tr ? "true" : "false") << ", \"type\": \"" << (v.type == 0 ? "f16" : "bf16") << "\"}" << (i + 1 < res.verifyKernels.size() ? "," : "") << "\n";
+           << ", \"tr\": " << (v.tr ? "true" : "false") << ", \"type\": \"" << (v.type == 0 ? "f16" : v.type == 1 ? "bf16" : v.type == 2 ? "s8" : "u8") << "\""
+           << ", \"dev\": " << (v.dev ? "true" : "false") << "}" << (i + 1 < res.verifyKernels.size() ? "," : "") << "\n";
       }
       os << "  ]";
     }

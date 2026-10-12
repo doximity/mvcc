@@ -24,6 +24,8 @@ if(DEFINED LLVM_TOOLS_BINARY_DIR AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/llc")
   target_compile_definitions(mvcc-ir2msl PRIVATE MVCC_LLC="${LLVM_TOOLS_BINARY_DIR}/llc")
 endif()
 target_link_libraries(mvcc-ir2msl PRIVATE ${LLVM_LIBS})
+# Room for install_name_tool to retarget libz3 / libzstd when the binary is installed by Homebrew.
+target_link_options(mvcc-ir2msl PRIVATE -Wl,-headerpad_max_install_names)
 # The LLVM imported targets carry their dependencies as interface libraries; the default strategy keeps the archives
 # named above first and appends them again in dependency order, and ld64 warns "ignoring duplicate libraries".
 # REORDER_FREELY (CMake 3.31+) emits each archive once, in a valid order.

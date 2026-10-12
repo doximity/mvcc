@@ -12,7 +12,10 @@ run_cmake_build() { cmake --build "$@" 2>&1 | tail -1; }
 run_cargo() { cargo "$@" 2>&1 | tail -1; }
 
 echo "== cpp (mvcc-ir2msl, mvcc-passes)"
-run_cmake -S "$ROOT/cpp/mvcc-llvm" -B "$ROOT/build/mvcc-llvm" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
+if [ -n "${LLVM_DIR:-}" ]; then LLVM_CMAKE="$LLVM_DIR"
+elif [ -n "${MVCC_LLVM_PREFIX:-}" ]; then LLVM_CMAKE="$MVCC_LLVM_PREFIX/lib/cmake/llvm"
+else LLVM_CMAKE="$(brew --prefix llvm)/lib/cmake/llvm"; fi
+run_cmake -S "$ROOT/cpp/mvcc-llvm" -B "$ROOT/build/mvcc-llvm" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_CMAKE"
 run_cmake_build "$ROOT/build/mvcc-llvm" --target mvcc-ir2msl mvcc-passes
 
 echo "== objc tools (mvcc-mslc)"
@@ -39,11 +42,16 @@ cp -f "$ROOT/msl/mvcc_prelude.metal" "$TK/share/mvcc/mvcc_prelude.metal"
 
 # runtime: one dylib serving both the runtime (libcudart) and driver (libcuda) APIs
 put "$OUT/libcudart.dylib" "$TK/lib64/libcudart.dylib"
-# The absolute toolkit path is longer than @rpath/libcudart.dylib. Without
-# headerpad this fails and `set -e` aborts at "== toolkit layout". Keep going
-# if rewrite still cannot fit; the dylib then stays at @rpath.
+# The absolute toolkit path is longer than @rpath/libcudart.dylib. headerpad (build.rs) makes the rewrite fit.
+# An @rpath id would let dyld search the working directory and every LC_RPATH for libcudart.
 if ! install_name_tool -id "$TK/lib64/libcudart.dylib" "$TK/lib64/libcudart.dylib"; then
-  echo "warning: install_name_tool could not set libcudart id; leaving @rpath"
+  echo "install_toolkit: install_name_tool could not set an absolute libcudart id" >&2
+  exit 1
+fi
+got_id="$(otool -D "$TK/lib64/libcudart.dylib" | sed -n '2p')"
+if [ "$got_id" != "$TK/lib64/libcudart.dylib" ]; then
+  echo "install_toolkit: libcudart id is '$got_id' (want $TK/lib64/libcudart.dylib)" >&2
+  exit 1
 fi
 ln -sfn libcudart.dylib "$TK/lib64/libcudart.12.dylib"
 ln -sfn libcudart.dylib "$TK/lib64/libcuda.dylib"
@@ -51,6 +59,8 @@ ln -sfn libcudart.dylib "$TK/lib64/libcuda.1.dylib"
 # NCCL over the logical devices (include/nccl.h): the same dylib; `find_library(nccl)` / `-lnccl` find it here
 ln -sfn libcudart.dylib "$TK/lib64/libnccl.dylib"
 ln -sfn libcudart.dylib "$TK/lib64/libnccl.2.dylib"
+# cuRAND host API (include/curand.h), Philox4_32_10 only. Same dylib; `-lcurand` finds it here.
+ln -sfn libcudart.dylib "$TK/lib64/libcurand.dylib"
 
 # static runtime: the rust staticlib plus an object carrying the framework/link dependencies via
 # LC_LINKER_OPTION so `-lcudart_static` alone links.
@@ -90,3 +100,8 @@ echo "toolkit ready: $TK"
 # sed reads to EOF: `head -1` closes the pipe after one line, and under pipefail the driver's panic on the broken
 # pipe (Rust ignores SIGPIPE; exit 101) failed the build whenever the driver lost the race
 "$TK/bin/nvcc" --version | sed -n 1p
+
+# Homebrew (and any other prefix install) copies this tree and rewrites the dylib id. See tools/install_prefix.sh.
+if [ -n "${MVCC_PREFIX:-}" ]; then
+  "$ROOT/tools/install_prefix.sh" "$MVCC_PREFIX"
+fi

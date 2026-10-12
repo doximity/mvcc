@@ -47,9 +47,10 @@ fn main() -> ExitCode {
         // two schedule texts, costs and legality against a synthetic contraction
         if raw.len() < 3 { return die("usage: mvcc diff <sched_a> <sched_b>"); }
         let layout = match Layout::discover() { Ok(l) => l, Err(e) => return die(&e) };
-        let st = std::process::Command::new(&layout.ir2msl)
-            .args(["--sched-diff", &raw[1], &raw[2]])
-            .status();
+        let mut cmd = std::process::Command::new(&layout.ir2msl);
+        cmd.args(["--sched-diff", &raw[1], &raw[2]]);
+        harden(&mut cmd);
+        let st = cmd.status();
         return match st {
             Ok(s) if s.success() => ExitCode::SUCCESS,
             Ok(_) => ExitCode::from(1),
@@ -62,7 +63,10 @@ fn main() -> ExitCode {
         let layout = match Layout::discover() { Ok(l) => l, Err(e) => return die(&e) };
         let mut args = vec!["--stir-in".to_string(), raw[1].clone()];
         if raw.len() >= 4 && raw[2] == "--sched-in" { args.push("--sched-in".into()); args.push(raw[3].clone()); }
-        let st = std::process::Command::new(&layout.ir2msl).args(&args).status();
+        let mut cmd = std::process::Command::new(&layout.ir2msl);
+        cmd.args(&args);
+        harden(&mut cmd);
+        let st = cmd.status();
         return match st {
             Ok(s) if s.success() => ExitCode::SUCCESS,
             Ok(_) => ExitCode::from(1),
@@ -406,14 +410,28 @@ fn link(o: &Opts, l: &Layout, objects: &[PathBuf]) -> Result<(), String> {
     if o.shared { c.arg("-shared"); }
     for obj in objects { c.arg(obj); }
     c.arg("-o").arg(o.output.clone().unwrap_or_else(|| PathBuf::from("a.out")));
-    for d in &o.lib_dirs { c.arg(format!("-L{}", d.display())); }
+    // Toolkit -L before any user -L, so a libcudart.dylib in the working directory or a -L. cannot replace the runtime.
+    if o.cudart != "none" {
+        if !l.lib64.is_absolute() { return Err("runtime library directory is not absolute; refusing a relative rpath".into()); }
+        let rpath = l.lib64.as_os_str().to_string_lossy();
+        if rpath.contains('@') || rpath.contains(',') {
+            return Err("runtime library directory must not contain '@' or ','".into());
+        }
+        c.arg(format!("-L{}", l.lib64.display()));
+    }
+    for d in &o.lib_dirs {
+        let s = d.as_os_str().to_string_lossy();
+        if s.contains('@') || s.contains(',') { return Err(format!("refusing library path '{}'", d.display())); }
+        c.arg(format!("-L{}", d.display()));
+    }
     for lib in &o.libs { c.arg(format!("-l{}", lib)); }
     for x in &o.linker_extra { c.arg(x); }
     for h in &o.host_extra { if h.starts_with("-fsanitize") || h.starts_with("-stdlib") || h == "-pthread" || h.starts_with("-fopenmp") || h.starts_with("-fprofile") || h.starts_with("-fuse-ld") || h.starts_with("-framework") { c.arg(h); } }
     if o.cudart != "none" {
-        c.arg(format!("-L{}", l.lib64.display())).arg("-lcudadevrt").arg("-lcudart");
+        c.arg("-lcudadevrt").arg("-lcudart");
         c.arg(format!("-Wl,-rpath,{}", l.lib64.display()));
     }
+    harden(&mut c);
     if o.verbose || std::env::var("MVCC_VERBOSE").is_ok() {
         // CMake extracts the host link launcher (first word) and implicit link libraries/dirs from this
         // line; the LIBRARIES= text printed at startup must appear verbatim.
@@ -541,7 +559,29 @@ fn clang_lang(l: &str) -> &'static str {
 
 // ------------------------------------------------------------------------------------------------ process helpers
 
+/// Drop variables that let a caller inject libraries, headers, or clang flags into the tools this compiler runs.
+fn harden(c: &mut Command) {
+    for key in [
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_FALLBACK_FRAMEWORK_PATH",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "LIBRARY_PATH",
+        "CPATH",
+        "C_INCLUDE_PATH",
+        "CPLUS_INCLUDE_PATH",
+        "OBJC_INCLUDE_PATH",
+        "CCC_OVERRIDE_OPTIONS",
+    ] {
+        c.env_remove(key);
+    }
+}
+
 fn exec(mut c: Command, o: &Opts) -> Result<(), String> {
+    harden(&mut c);
     if o.verbose || std::env::var("MVCC_VERBOSE").is_ok() {
         eprintln!("#$ {}", render(&c));
     }
@@ -552,6 +592,7 @@ fn exec(mut c: Command, o: &Opts) -> Result<(), String> {
 
 /// Like `exec`, but returns the child's stderr on failure (printed by the caller unless it handles it).
 fn exec_capture(mut c: Command, o: &Opts) -> Result<(), String> {
+    harden(&mut c);
     if o.verbose || std::env::var("MVCC_VERBOSE").is_ok() { eprintln!("#$ {}", render(&c)); }
     if o.dry_run { return Ok(()); }
     let out = c.output().map_err(|e| format!("cannot run {}: {}", c.get_program().to_string_lossy(), e))?;

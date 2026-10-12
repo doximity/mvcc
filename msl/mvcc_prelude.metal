@@ -811,6 +811,51 @@ inline void __mvcc_tp_mma(thread float* d, const thread uint* a, const thread ui
   __mvcc_static_for<0, M * N / 32>([&](auto i) { d[i.value] = ct[i.value]; });
 }
 
+// Device-operand matmul2d (tensor_recovery.cpp, proveDeviceBlocks): the compiler proved that every mma.sync fragment
+// of the op was loaded straight from device memory as one row-major tile - A [M][K], B [N][K], k contiguous - so the
+// op reads the tiles itself: no fills, no shuffles. pa, pb: this lane's address of its first fragment word, which is
+// (row lane/4, column kw*(lane%4)) of the tile; lda, ldb: the row pitches in elements, or -1 when the compiler could
+// not compute one at the op (then lane 0's address is the origin and lane 4's is one row further). c/d: M*N/32
+// accumulator slots (float, or int for 8-bit integer inputs).
+// The origin is the same in every lane (the compiler proved it); broadcast from one lane, it is one value per
+// simdgroup to the Metal compiler as well (6% of a recovered attention loop, M5 Pro).
+template <typename T>
+inline ulong __mvcc_tp_tile_origin(ulong p, thread int& ld, uint lane) {
+  if (ld >= 0) {
+    const uint2 h = as_type<uint2>(p - ((ulong)(lane >> 2) * (ulong)ld + (4 / sizeof(T)) * (lane & 3u)) * sizeof(T));
+    return as_type<ulong>(uint2(simd_broadcast_first(h.x), simd_broadcast_first(h.y)));
+  }
+  const uint2 h = as_type<uint2>(p);
+  const ulong o = as_type<ulong>(uint2(simd_broadcast(h.x, (ushort)0), simd_broadcast(h.y, (ushort)0)));
+  const ulong r = as_type<ulong>(uint2(simd_broadcast(h.x, (ushort)4), simd_broadcast(h.y, (ushort)4)));
+  ld = (int)(((long)r - (long)o) / (long)sizeof(T));
+  return o;
+}
+// AS / BS: that operand is a threadgroup-memory tile (the address is a threadgroup pointer as ulong).
+#define __MVCC_TP_MMAD_RUN(SA, SB)                                                                                   \
+  {                                                                                                                  \
+    using TA = metal::tensor<SA T, metal::dextents<int, 2>, metal::tensor_inline>;                                   \
+    using TB = metal::tensor<SB T, metal::dextents<int, 2>, metal::tensor_inline>;                                   \
+    TA tA((SA T*)a0, metal::dextents<int, 2>(K, M), metal::array<int, 2>({1, lda}));                                 \
+    TB tB((SB T*)b0, metal::dextents<int, 2>(K, N), metal::array<int, 2>({1, ldb}));                                 \
+    constexpr auto desc = mpp::tensor_ops::matmul2d_descriptor(M, N, K, false, true, false,                          \
+                                                               mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate); \
+    mpp::tensor_ops::matmul2d<desc, metal::execution_simdgroups<1>> op;                                              \
+    auto ct = op.template get_destination_cooperative_tensor<TA, TB, E>();                                           \
+    _Pragma("unroll") for (uint16_t i = 0; i < M * N / 32; ++i) ct[i] = c[i];                                        \
+    op.run(tA, tB, ct);                                                                                              \
+    _Pragma("unroll") for (uint16_t i = 0; i < M * N / 32; ++i) d[i] = ct[i];                                        \
+  }
+template <typename T, typename E, int M, int N, int K, bool AS, bool BS>
+inline void __mvcc_tp_mmad(thread E* d, ulong pa, ulong pb, int lda, int ldb, const thread E* c, uint lane) {
+  const ulong a0 = __mvcc_tp_tile_origin<T>(pa, lda, lane), b0 = __mvcc_tp_tile_origin<T>(pb, ldb, lane);
+  if constexpr (AS && BS) __MVCC_TP_MMAD_RUN(__MVCC_SMEM, __MVCC_SMEM)
+  else if constexpr (AS) __MVCC_TP_MMAD_RUN(__MVCC_SMEM, device)
+  else if constexpr (BS) __MVCC_TP_MMAD_RUN(device, __MVCC_SMEM)
+  else __MVCC_TP_MMAD_RUN(device, device)
+}
+#undef __MVCC_TP_MMAD_RUN
+
 // Accumulator layout conversions go through a per-simdgroup threadgroup scratch block (8 rows x 16 cols of float =
 // 512 bytes, reserved by the compiler next to the kernel's static shared memory; a tile converts one block per
 // round) rather than through simd_shuffle. Both are 2*M*N/32 operations per lane, but shuffling the
@@ -819,25 +864,29 @@ inline void __mvcc_tp_mma(thread float* d, const thread uint* a, const thread ui
 // Coordinates: slot s of lane l is (row, col) by the layout law; mma.sync position p = (mt*(N/8) + nt)*4 + r of lane
 // l is D[16mt + (l>>2) + 8(r>>1)][8nt + 2(l&3) + (r&1)]. Block membership (row>>3, col>>4) of a slot or a position
 // does not depend on the lane (row bit 3 is a slot bit, col bit 3 the only lane-dependent bit below 4), so every
-// scratch index below is static apart from the in-block lane coordinates. 8x16 is the smallest such block.
-template <int M, int N>
-inline void __mvcc_tp_acc2ptx(thread float* out, const thread float* slots, uint lane, __MVCC_SMEM float* scratch) {
+// scratch index below is static apart from the in-block lane coordinates. 8x16 is the smallest such block. A lane's
+// slots in a block are one run of 4 along a row (one 16-byte access, the scratch is 16-byte aligned) and its
+// positions two pairs of adjacent columns (two 8-byte accesses).
+template <int M, int N, typename E>
+inline void __mvcc_tp_acc2ptx(thread E* out, const thread E* slots, uint lane, __MVCC_SMEM E* scratch) {
   const uint g = lane >> 2, t = lane & 3;
   __mvcc_static_for<0, (M / 8) * (N / 16)>([&](auto bi) {
     constexpr int rb = bi.value / (N / 16), cb = bi.value % (N / 16);
-    __mvcc_static_for<0, M * N / 32>([&](auto si) {
-      constexpr int s = si.value;
+    __mvcc_static_for<0, M * N / 128>([&](auto qi) {
+      constexpr int s = 4 * qi.value;
       constexpr int sr = (int)mvcc_tp::law_row(0u, (uint)s, false, M, N) >> 3, sc = (int)mvcc_tp::law_col(0u, (uint)s, false, M, N) >> 4;
       if constexpr (sr == rb && sc == cb) {
         const uint m = mvcc_tp::law_row(lane, (uint)s, false, M, N), n = mvcc_tp::law_col(lane, (uint)s, false, M, N);
-        scratch[(m & 7u) * 16u + (n & 15u)] = slots[s];
+        *(__MVCC_SMEM vec<E, 4>*)(scratch + (m & 7u) * 16u + (n & 15u)) = vec<E, 4>(slots[s], slots[s + 1], slots[s + 2], slots[s + 3]);
       }
     });
     simdgroup_barrier(__MVCC_SMEM_FLAGS);
-    __mvcc_static_for<0, M * N / 32>([&](auto pi) {
-      constexpr int p = pi.value, tile = p >> 2, r = p & 3, mt = tile / (N / 8), nt = tile % (N / 8);
+    __mvcc_static_for<0, M * N / 64>([&](auto pi) {
+      constexpr int p = 2 * pi.value, tile = p >> 2, r = p & 3, mt = tile / (N / 8), nt = tile % (N / 8);
       if constexpr (2 * mt + (r >> 1) == rb && nt / 2 == cb) {
-        out[p] = scratch[g * 16u + 8u * (nt & 1) + 2u * t + (r & 1)];
+        const vec<E, 2> v = *(__MVCC_SMEM vec<E, 2>*)(scratch + g * 16u + 8u * (nt & 1) + 2u * t);
+        out[p] = v.x;
+        out[p + 1] = v.y;
       }
     });
     simdgroup_barrier(__MVCC_SMEM_FLAGS);
@@ -862,24 +911,28 @@ inline void __mvcc_tp_ctstore(const thread T* v, device T* base, int ld, int row
   ct.store(t);
 }
 
-template <int M, int N>
-inline void __mvcc_tp_ptx2acc(thread float* out, const thread float* ptx, uint lane, __MVCC_SMEM float* scratch) {
+template <int M, int N, typename E>
+inline void __mvcc_tp_ptx2acc(thread E* out, const thread E* ptx, uint lane, __MVCC_SMEM E* scratch) {
   const uint g = lane >> 2, t = lane & 3;
   __mvcc_static_for<0, (M / 8) * (N / 16)>([&](auto bi) {
     constexpr int rb = bi.value / (N / 16), cb = bi.value % (N / 16);
-    __mvcc_static_for<0, M * N / 32>([&](auto pi) {
-      constexpr int p = pi.value, tile = p >> 2, r = p & 3, mt = tile / (N / 8), nt = tile % (N / 8);
+    __mvcc_static_for<0, M * N / 64>([&](auto pi) {
+      constexpr int p = 2 * pi.value, tile = p >> 2, r = p & 3, mt = tile / (N / 8), nt = tile % (N / 8);
       if constexpr (2 * mt + (r >> 1) == rb && nt / 2 == cb) {
-        scratch[g * 16u + 8u * (nt & 1) + 2u * t + (r & 1)] = ptx[p];
+        *(__MVCC_SMEM vec<E, 2>*)(scratch + g * 16u + 8u * (nt & 1) + 2u * t) = vec<E, 2>(ptx[p], ptx[p + 1]);
       }
     });
     simdgroup_barrier(__MVCC_SMEM_FLAGS);
-    __mvcc_static_for<0, M * N / 32>([&](auto si) {
-      constexpr int s = si.value;
+    __mvcc_static_for<0, M * N / 128>([&](auto qi) {
+      constexpr int s = 4 * qi.value;
       constexpr int sr = (int)mvcc_tp::law_row(0u, (uint)s, false, M, N) >> 3, sc = (int)mvcc_tp::law_col(0u, (uint)s, false, M, N) >> 4;
       if constexpr (sr == rb && sc == cb) {
         const uint m = mvcc_tp::law_row(lane, (uint)s, false, M, N), n = mvcc_tp::law_col(lane, (uint)s, false, M, N);
-        out[s] = scratch[(m & 7u) * 16u + (n & 15u)];
+        const vec<E, 4> v = *(__MVCC_SMEM vec<E, 4>*)(scratch + (m & 7u) * 16u + (n & 15u));
+        out[s] = v.x;
+        out[s + 1] = v.y;
+        out[s + 2] = v.z;
+        out[s + 3] = v.w;
       }
     });
     simdgroup_barrier(__MVCC_SMEM_FLAGS);
