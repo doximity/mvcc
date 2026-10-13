@@ -86,14 +86,17 @@ for lib in cudadevrt rt; do rm -f "$TK/lib64/lib$lib.a"; ar rcs "$TK/lib64/lib$l
 rm -rf "$TMP"
 
 # version.json: what CMake's FindCUDAToolkit reads (the CUDA release we present) plus our own version (the workspace
-# version in Cargo.toml, the single source) and the macOS range this version is validated on (README.md).
+# version in Cargo.toml, the single source), the LLVM release mvcc-ir2msl and libmvcc-passes were built against (nvcc
+# picks a clang from the same major) and the macOS range this version is validated on (README.md).
 MVCC_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
+LLVM_VERSION="$(sed -n 's/^set(PACKAGE_VERSION "\([0-9][0-9.]*\)")$/\1/p' "$LLVM_CMAKE/LLVMConfigVersion.cmake")"
+[ -n "$LLVM_VERSION" ] || { echo "install_toolkit: no PACKAGE_VERSION in $LLVM_CMAKE/LLVMConfigVersion.cmake" >&2; exit 1; }
 cat > "$TK/version.json" <<EOF
 {
   "cuda": { "name": "CUDA SDK", "version": "12.8.0" },
   "cuda_cudart": { "name": "CUDA Runtime (cudart)", "version": "12.8.57" },
   "cuda_nvcc": { "name": "CUDA NVCC", "version": "12.8.61" },
-  "mvcc": { "name": "mvcc", "version": "$MVCC_VERSION", "macos_validated": ">=26.0, <27.0" }
+  "mvcc": { "name": "mvcc", "version": "$MVCC_VERSION", "llvm": "$LLVM_VERSION", "macos_validated": ">=26.0, <27.0" }
 }
 EOF
 echo "toolkit ready: $TK"

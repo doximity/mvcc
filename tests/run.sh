@@ -262,6 +262,12 @@ step "nvcc driver modes"
 run nvcc-version nvcc --version
 run nvcc-ptx-mode bash -c "nvcc -ptx -o '$OUT/vector_add.ptx' '$ROOT/tests/kernels/vector_add.cu' && test -s '$OUT/vector_add.ptx'"
 run nvcc-keep bash -c "MVCC_KEEP=1 nvcc -c -o '$OUT/keep/vector_add.o' '$ROOT/tests/kernels/vector_add.cu' 2>/dev/null || (mkdir -p '$OUT/keep' && MVCC_KEEP=1 nvcc -c -o '$OUT/keep/vector_add.o' '$ROOT/tests/kernels/vector_add.cu') && test -s '$OUT/keep/vector_add.metal'"
+# clang loads libmvcc-passes, so a clang++ from another LLVM major must be refused before it runs.
+mkdir -p "$OUT/other-llvm" && printf '#!/bin/sh\necho 1.0.0\n' >"$OUT/other-llvm/clang++" && chmod +x "$OUT/other-llvm/clang++"
+if MVCC_CLANG="$OUT/other-llvm/clang++" nvcc -c -o "$OUT/other-llvm/vector_add.o" "$ROOT/tests/kernels/vector_add.cu" >"$OUT/clang-mismatch.log" 2>&1; then
+  bad "nvcc accepted a clang++ from another LLVM release (see $OUT/clang-mismatch.log)"
+elif grep -q 'built against LLVM' "$OUT/clang-mismatch.log"; then ok "nvcc refuses a clang++ from another LLVM release"
+else bad "clang++ LLVM mismatch message (see $OUT/clang-mismatch.log)"; fi
 
 step "CMake CUDA project"
 rm -rf "$OUT/cmake-build"
@@ -269,6 +275,12 @@ if cmake -S "$ROOT/tests/cmake-project" -B "$OUT/cmake-build" -DCMAKE_CUDA_COMPI
    && cmake --build "$OUT/cmake-build" >>"$OUT/cmake.log" 2>&1; then
   if [ "$HOST" = 1 ]; then ok "cmake project configure/build"; elif "$OUT/cmake-build/app" >>"$OUT/cmake.log" 2>&1; then ok "cmake project configure/build/run"; else bad "cmake project (see $OUT/cmake.log)"; fi
 else bad "cmake project (see $OUT/cmake.log)"; fi
+# Homebrew links only bin/nvcc out of libexec; CMake must find the toolkit from nvcc -v (TOP=), not from the link's directory.
+rm -rf "$OUT/cmake-linked-build" "$OUT/linked-bin" && mkdir -p "$OUT/linked-bin" && ln -s "$PREFIX/bin/nvcc" "$OUT/linked-bin/nvcc"
+if [ ! -x "$PREFIX/bin/nvcc" ]; then bad "cmake through a symlinked nvcc: no install prefix (see $OUT/prefix.log)"
+elif cmake -S "$ROOT/tests/cmake-project" -B "$OUT/cmake-linked-build" -DCMAKE_CUDA_COMPILER="$OUT/linked-bin/nvcc" -DCMAKE_CUDA_ARCHITECTURES=89 >"$OUT/cmake-linked.log" 2>&1 \
+   && cmake --build "$OUT/cmake-linked-build" >>"$OUT/cmake-linked.log" 2>&1; then ok "cmake through a symlinked nvcc (no CUDAToolkit_ROOT)"
+else bad "cmake through a symlinked nvcc (see $OUT/cmake-linked.log)"; fi
 
 step "examples/qwen"
 if MVCC_GRAPH="$ROOT/tests/stir/qwen_decode.graph" nvcc -O3 -std=c++17 -o "$OUT/qwen" "$ROOT/examples/qwen/qwen.cu" >"$OUT/qwen.build.log" 2>&1; then

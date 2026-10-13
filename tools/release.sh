@@ -53,6 +53,7 @@ v["mvcc"]["commit"] = commit
 v["mvcc"]["built_on_macos"] = host
 json.dump(v, open(p, "w"), indent=2); open(p, "a").write("\n")
 EOF
+LLVM_MAJOR="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["mvcc"]["llvm"].split(".")[0])' "$STAGE/$NAME/toolkit/version.json")"
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$STAGE/$NAME/"
 mkdir -p "$STAGE/$NAME/tools"
 cp "$ROOT/tools/install_prefix.sh" "$STAGE/$NAME/tools/"
@@ -65,7 +66,8 @@ cat > "$STAGE/$NAME/INSTALL.md" <<EOF
 # mvcc $VERSION ($COMMIT)
 
 A CUDA-compatible toolchain for Apple silicon. Built and validated on macOS $HOST_MACOS; see toolkit/version.json for
-the macOS range this release is validated on. Requires Homebrew llvm (clang with the NVPTX target) at compile time.
+the macOS range this release is validated on. Compiling needs clang from LLVM $LLVM_MAJOR, the release mvcc-ir2msl was
+built against: Homebrew llvm while it is LLVM $LLVM_MAJOR, or llvm@$LLVM_MAJOR.
 
     export PATH="\$PWD/toolkit/bin:\$PATH"
     nvcc --version

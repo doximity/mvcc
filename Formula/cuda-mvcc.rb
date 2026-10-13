@@ -21,47 +21,52 @@ class CudaMvcc < Formula
   end
 
   depends_on arch: :arm64
+  # nvcc needs clang from the LLVM major recorded in libexec/version.json and looks for llvm@<major> before llvm.
   depends_on "llvm"
   depends_on macos: :tahoe
   depends_on "z3"
   depends_on "zstd"
 
-  # CMake finds the toolkit only if nvvm/libdevice exists; it is empty, and Homebrew prunes empty directories.
-  skip_clean "nvvm"
-
   def install
-    ENV["MVCC_DYLIB_ID"] = "#{opt_prefix}/lib64/libcudart.dylib"
-    ENV["MVCC_Z3_LIB"] = Formula["z3"].opt_lib.to_s
-    ENV["MVCC_ZSTD_LIB"] = Formula["zstd"].opt_lib.to_s
+    # The toolkit stays in libexec: linking its include/ and lib/ would put cuda.h, libcuda, libcudart and a stub
+    # librt.a into HOMEBREW_PREFIX/include and lib, where unrelated builds pick them up.
+    ENV["MVCC_DYLIB_ID"] = "#{opt_libexec}/lib64/libcudart.dylib"
+    ENV["MVCC_Z3_LIB"] = formula_opt_lib("z3").to_s
+    ENV["MVCC_ZSTD_LIB"] = formula_opt_lib("zstd").to_s
     if build.head?
-      ENV["LLVM_DIR"] = (Formula["llvm"].opt_lib/"cmake/llvm").to_s
-      ENV["MVCC_PREFIX"] = prefix.to_s
+      ENV["LLVM_DIR"] = (formula_opt_lib("llvm")/"cmake/llvm").to_s
+      ENV["MVCC_PREFIX"] = libexec.to_s
       system "tools/install_toolkit.sh", "release"
     else
-      system "tools/install_prefix.sh", prefix
+      system "tools/install_prefix.sh", libexec
     end
+    bin.install_symlink libexec/"bin/nvcc", libexec/"bin/mvcc"
   end
 
   def caveats
     <<~EOS
-      nvcc is on your PATH. Point CMake at this prefix:
+      nvcc and mvcc are on your PATH. The CUDA headers and libraries stay in
+      #{opt_libexec}, outside Homebrew's include and lib. For CMake:
 
         cmake -S . -B build \\
           -DCMAKE_CUDA_COMPILER=#{opt_bin}/nvcc \\
-          -DCUDAToolkit_ROOT=#{opt_prefix} \\
+          -DCUDAToolkit_ROOT=#{opt_libexec} \\
           -DCMAKE_CUDA_ARCHITECTURES=89
 
-      Compiling CUDA still needs Homebrew llvm (a dependency). The runtime is
-      Philox-only for cuRAND; see the mvcc README.
+      Compiling CUDA needs clang from the LLVM release recorded in
+      #{opt_libexec}/version.json. After Homebrew's llvm moves past
+      it, install llvm@<that major>; nvcc looks for it before llvm.
+      The runtime is Philox-only for cuRAND; see the mvcc README.
     EOS
   end
 
   test do
+    assert_match "Cuda compiler driver", shell_output("#{bin}/nvcc --version")
     (testpath/"hello.cu").write <<~CUDA
       __global__ void k(int* p) { *p = 1; }
       int main() { return 0; }
     CUDA
-    ENV["MVCC_CLANG"] = (Formula["llvm"].opt_bin/"clang++").to_s
     system bin/"nvcc", "-O2", "-c", "hello.cu", "-o", "hello.o"
+    assert_path_exists testpath/"hello.o"
   end
 end

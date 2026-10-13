@@ -28,7 +28,11 @@ brew tap doximity/mvcc https://github.com/doximity/mvcc
 brew install --HEAD cuda-mvcc
 ```
 
-To publish a release: `tools/release.sh`, attach `dist/mvcc-<version>-macos-arm64.tar.gz` to a GitHub release tagged `v<version>`, and let `.github/workflows/brew.yml` open the formula pull request (or run `tools/update_brew_formula.py` on that tarball yourself). The formula unpacks the toolkit into the Homebrew prefix. `libcudart`'s install name is the absolute path `$(brew --prefix cuda-mvcc)/lib64/libcudart.dylib`, so a program does not search the working directory or `@rpath` for the runtime. `nvcc` loads `mvcc-ir2msl` and `libmvcc-passes` only from that same prefix (a symlink to a tool outside it is refused). It does not pass `DYLD_*`, `CPATH`, or `LIBRARY_PATH` through to clang, and the prefix install signs the toolchain with the hardened runtime.
+The formula keeps the toolkit in `$(brew --prefix cuda-mvcc)/libexec` and links only `nvcc` and `mvcc` into Homebrew's `bin`, so its CUDA headers and libraries stay out of the shared `include` and `lib` directories. CMake finds the toolkit through the linked `nvcc`, and `brew info cuda-mvcc` prints the CMake flags. `libcudart`'s install name is the absolute path `$(brew --prefix cuda-mvcc)/libexec/lib64/libcudart.dylib`, so a program does not search the working directory or `@rpath` for the runtime. `nvcc` loads `mvcc-ir2msl` and `libmvcc-passes` only from that same toolkit (a symlink to a tool outside it is refused). It does not pass `DYLD_*`, `CPATH`, or `LIBRARY_PATH` through to clang, and the prefix install signs the toolchain with the hardened runtime.
+
+A build of mvcc works only with clang from the LLVM major release it was built against, because clang loads mvcc's device pass. `version.json` records that release (`"llvm"`). `nvcc` uses `llvm@<major>` if it is installed, then Homebrew `llvm`, and otherwise stops with an error naming both versions. When Homebrew's `llvm` moves to a newer major, `brew install llvm@<major>` keeps an installed release working.
+
+To publish a release: `tools/release.sh`, attach `dist/mvcc-<version>-macos-arm64.tar.gz` to a GitHub release tagged `v<version>`, and let `.github/workflows/brew.yml` open the formula pull request (or run `tools/update_brew_formula.py` on that tarball yourself).
 
 From a clone:
 
