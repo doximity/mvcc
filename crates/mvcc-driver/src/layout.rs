@@ -57,7 +57,7 @@ impl Layout {
             .ok_or("cannot find mvcc_prelude.metal inside the toolkit")?;
         let include = require_inside(&trust, &toolkit.join("include/cuda_runtime.h"), "cuda_runtime.h")?;
         let include = include.parent().map(|p| p.to_path_buf()).ok_or("include has no directory")?;
-        let clang = find_clang()?;
+        let clang = find_clang(built_llvm_major(&trust, &toolkit))?;
         Ok(Layout { include, lib64: libdir, toolkit, clang, ir2msl, passes, mslc, prelude })
     }
 
@@ -66,7 +66,10 @@ impl Layout {
         eprintln!("#$ _MVCC_CLANG_={}", self.clang.display());
         eprintln!("#$ _MVCC_IR2MSL_={}", self.ir2msl.display());
         eprintln!("#$ _MVCC_PRELUDE_={}", self.prelude.display());
-        // Lines CMake's CMakeNVCCParseImplicitInfo reads.
+        // TOP and NVVMIR_LIBRARY_DIR are how CMake finds the toolkit behind a symlinked nvcc (CMakeCUDAFindToolkit,
+        // FindCUDAToolkit); the rest are the lines CMakeNVCCParseImplicitInfo reads.
+        eprintln!("#$ TOP={}", self.toolkit.display());
+        eprintln!("#$ NVVMIR_LIBRARY_DIR={}", self.toolkit.join("nvvm/libdevice").display());
         eprintln!("#$ PATH={}", std::env::var("PATH").unwrap_or_default());
         eprintln!("#$ INCLUDES=\"-I{}\"", self.include.display());
         eprintln!("#$ SYSTEM_INCLUDES=");
@@ -135,35 +138,77 @@ fn require_inside(root: &Path, path: &Path, what: &str) -> Result<PathBuf, Strin
     Ok(real)
 }
 
-fn find_clang() -> Result<PathBuf, String> {
+/// The LLVM major release mvcc-ir2msl and libmvcc-passes were built against (`mvcc.llvm` in version.json).
+fn built_llvm_major(trust: &Path, toolkit: &Path) -> Option<u32> {
+    let path = require_inside(trust, &toolkit.join("version.json"), "version.json").ok()?;
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    llvm_major(v.get("mvcc")?.get("llvm")?.as_str()?)
+}
+
+fn llvm_major(version: &str) -> Option<u32> { version.trim().split('.').next()?.parse().ok() }
+
+/// clang loads libmvcc-passes into its own process and hands its IR to mvcc-ir2msl, so when `want` is known the
+/// clang must come from that LLVM major release: `llvm@<want>` first, then whichever release `llvm` currently is.
+fn find_clang(want: Option<u32>) -> Result<PathBuf, String> {
     // Keep the `clang++` path. Canonicalizing it follows the symlink to `clang`, and argv[0] `clang`
     // does not link libc++.
     if let Ok(c) = std::env::var("MVCC_CLANG") {
         let p = PathBuf::from(&c);
         if !p.is_absolute() { return Err("MVCC_CLANG must be an absolute path".into()); }
         if !p.exists() { return Err(format!("MVCC_CLANG={} does not exist", c)); }
-        return Ok(p);
+        return match want {
+            Some(m) if clang_major(&p) != Some(m) => Err(llvm_mismatch(m, &p)),
+            _ => Ok(p),
+        };
     }
-    let candidates = [
+    let mut candidates: Vec<PathBuf> = want.map(|m| PathBuf::from(format!("/opt/homebrew/opt/llvm@{m}/bin/clang++"))).into_iter().collect();
+    for c in [
         "/opt/homebrew/opt/llvm/bin/clang++",
         "/usr/local/opt/llvm/bin/clang++",
         "/opt/homebrew/opt/llvm@23/bin/clang++",
         "/opt/homebrew/opt/llvm@22/bin/clang++",
         "/opt/homebrew/opt/llvm@21/bin/clang++",
-    ];
-    for c in candidates {
-        let p = Path::new(c);
-        if p.exists() { return Ok(p.to_path_buf()); }
+    ] {
+        if !candidates.iter().any(|p| p == Path::new(c)) { candidates.push(PathBuf::from(c)); }
+    }
+    let mut rejected: Option<PathBuf> = None;
+    let mut accept = |p: PathBuf| -> Option<PathBuf> {
+        match want {
+            Some(m) if clang_major(&p) != Some(m) => { rejected.get_or_insert(p); None }
+            _ => Some(p),
+        }
+    };
+    for p in candidates {
+        if p.exists() { if let Some(p) = accept(p) { return Ok(p); } }
     }
     // Absolute PATH entries only. An empty component is the working directory, which is a binary plant.
     if let Ok(path) = std::env::var("PATH") {
         for dir in path.split(':') {
             if dir.is_empty() || !Path::new(dir).is_absolute() { continue; }
             let p = Path::new(dir).join("clang++");
-            if p.exists() && clang_has_nvptx(&p) { return Ok(p); }
+            if p.exists() && clang_has_nvptx(&p) { if let Some(p) = accept(p) { return Ok(p); } }
         }
     }
-    Err("no clang++ with NVPTX support found; `brew install llvm` or set MVCC_CLANG to an absolute path".into())
+    Err(match (want, rejected) {
+        (Some(m), Some(p)) => llvm_mismatch(m, &p),
+        (Some(m), None) => format!("no clang++ from LLVM {m} with NVPTX support found; `brew install llvm@{m}` or set MVCC_CLANG to an absolute path"),
+        (None, _) => "no clang++ with NVPTX support found; `brew install llvm` or set MVCC_CLANG to an absolute path".into(),
+    })
+}
+
+fn llvm_mismatch(want: u32, clang: &Path) -> String {
+    let got = clang_major(clang).map_or_else(|| "did not report its LLVM version".to_string(), |g| format!("is LLVM {g}"));
+    format!(
+        "this mvcc was built against LLVM {want}, but {} {got}, and a clang from another LLVM release cannot load mvcc's device pass; `brew install llvm@{want}` or set MVCC_CLANG to a clang++ from LLVM {want}",
+        clang.display()
+    )
+}
+
+fn clang_major(p: &Path) -> Option<u32> {
+    let mut c = std::process::Command::new(p);
+    c.arg("-dumpversion");
+    crate::harden(&mut c);
+    llvm_major(&String::from_utf8_lossy(&c.output().ok()?.stdout))
 }
 
 #[cfg(test)]
@@ -184,8 +229,31 @@ mod tests {
         assert!(require_inside(&tmp.join("trust"), &tmp.join("trust/bin/ok"), "tool").is_ok());
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn llvm_major_reads_dumpversion_and_version_json() {
+        assert_eq!(llvm_major("23.1.0\n"), Some(23));
+        assert_eq!(llvm_major("22"), Some(22));
+        assert_eq!(llvm_major(""), None);
+        assert_eq!(llvm_major("clang version 23.1.0"), None);
+    }
+
+    #[test]
+    fn built_llvm_major_comes_from_version_json() {
+        let tmp = std::env::temp_dir().join(format!("mvcc-llvm-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert_eq!(built_llvm_major(&tmp, &tmp), None);
+        std::fs::write(tmp.join("version.json"), r#"{"mvcc": {"version": "1.1.0", "llvm": "23.1.0"}}"#).unwrap();
+        assert_eq!(built_llvm_major(&tmp, &tmp), Some(23));
+        std::fs::write(tmp.join("version.json"), r#"{"mvcc": {"version": "1.1.0"}}"#).unwrap();
+        assert_eq!(built_llvm_major(&tmp, &tmp), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 fn clang_has_nvptx(p: &Path) -> bool {
-    std::process::Command::new(p).arg("-print-targets").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("nvptx64")).unwrap_or(false)
+    let mut c = std::process::Command::new(p);
+    c.arg("-print-targets");
+    crate::harden(&mut c);
+    c.output().map(|o| String::from_utf8_lossy(&o.stdout).contains("nvptx64")).unwrap_or(false)
 }

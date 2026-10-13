@@ -107,7 +107,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mvcc-cudart"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "cc",
  "parking_lot",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "mvcc-driver"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",

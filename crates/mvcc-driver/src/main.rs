@@ -103,7 +103,7 @@ fn print_help() {
     println!("usage: mvcc [nvcc options] <inputs>...\n\n\
 Accepts nvcc's options. mvcc-specific environment variables:\n  \
 MVCC_ARCH=sm_XX        virtual CUDA arch for __CUDA_ARCH__ (default: the highest -arch/-gencode asked for, up to sm_90; {DEFAULT_ARCH} when none)\n  \
-MVCC_CLANG=<path>      clang++ with NVPTX support (default: Homebrew llvm)\n  \
+MVCC_CLANG=<path>      clang++ with NVPTX support from the LLVM major in version.json (default: Homebrew llvm@<major>, then llvm)\n  \
 MVCC_ROOT=<dir>        mvcc install/toolkit root\n  \
 MVCC_VERIFY=0          skip the Metal compile check of generated MSL\n  \
 MVCC_KEEP=1            keep intermediates next to the output (.ll, .metal, .abi.json)\n  \
