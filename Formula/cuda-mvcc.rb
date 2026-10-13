@@ -1,29 +1,33 @@
 class CudaMvcc < Formula
   desc "CUDA C++ compiler and runtime for Apple silicon"
   homepage "https://github.com/doximity/mvcc"
-  license "Apache-2.0"
   # brew-stable:begin
   # Filled by tools/update_brew_formula.py when a GitHub release asset exists.
   # Until then this is a head-only formula: brew install --HEAD cuda-mvcc
   # brew-stable:end
-  head "https://github.com/doximity/mvcc.git", branch: "master"
+  license "Apache-2.0"
 
   livecheck do
     url :homepage
     strategy :github_latest
   end
 
-  depends_on "llvm"
-  depends_on "z3"
-  depends_on "zstd"
-  depends_on arch: :arm64
-  depends_on macos: :tahoe
+  head do
+    url "https://github.com/doximity/mvcc.git", branch: "master"
 
-  on_head do
     depends_on "cmake" => :build
     depends_on "ninja" => :build
     depends_on "rust" => :build
   end
+
+  depends_on arch: :arm64
+  depends_on "llvm"
+  depends_on macos: :tahoe
+  depends_on "z3"
+  depends_on "zstd"
+
+  # CMake finds the toolkit only if nvvm/libdevice exists; it is empty, and Homebrew prunes empty directories.
+  skip_clean "nvvm"
 
   def install
     ENV["MVCC_DYLIB_ID"] = "#{opt_prefix}/lib64/libcudart.dylib"
