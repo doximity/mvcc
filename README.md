@@ -17,7 +17,7 @@ From Homebrew, once a release has been published and `Formula/cuda-mvcc.rb` carr
 
 ```bash
 brew tap doximity/mvcc https://github.com/doximity/mvcc
-brew install cuda-mvcc
+brew install doximity/mvcc/cuda-mvcc
 nvcc --version
 ```
 
@@ -25,8 +25,10 @@ Until that checksum is filled in, the formula is head-only and builds from sourc
 
 ```bash
 brew tap doximity/mvcc https://github.com/doximity/mvcc
-brew install --HEAD cuda-mvcc
+brew install --HEAD doximity/mvcc/cuda-mvcc
 ```
+
+Homebrew loads formulae from a third-party tap only once they are trusted. Installing by the fully qualified name `doximity/mvcc/cuda-mvcc` trusts this formula (`brew trust` lists it), so later `brew upgrade` runs work with the short name.
 
 The formula keeps the toolkit in `$(brew --prefix cuda-mvcc)/libexec` and links only `nvcc` and `mvcc` into Homebrew's `bin`, so its CUDA headers and libraries stay out of the shared `include` and `lib` directories. CMake finds the toolkit through the linked `nvcc`, and `brew info cuda-mvcc` prints the CMake flags. `libcudart`'s install name is the absolute path `$(brew --prefix cuda-mvcc)/libexec/lib64/libcudart.dylib`, so a program does not search the working directory or `@rpath` for the runtime. `nvcc` loads `mvcc-ir2msl` and `libmvcc-passes` only from that same toolkit (a symlink to a tool outside it is refused). It does not pass `DYLD_*`, `CPATH`, or `LIBRARY_PATH` through to clang, and the prefix install signs the toolchain with the hardened runtime.
 

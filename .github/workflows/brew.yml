@@ -84,7 +84,7 @@ jobs:
 
           ## Test plan
           - [ ] \`brew tap doximity/mvcc https://github.com/doximity/mvcc\`
-          - [ ] \`brew install cuda-mvcc\`
+          - [ ] \`brew install doximity/mvcc/cuda-mvcc\`
           - [ ] \`nvcc --version\` and a small \`curand_kernel.h\` program
           EOF
           )"

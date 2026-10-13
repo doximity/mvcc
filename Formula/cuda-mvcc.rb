@@ -3,7 +3,7 @@ class CudaMvcc < Formula
   homepage "https://github.com/doximity/mvcc"
   # brew-stable:begin
   # Filled by tools/update_brew_formula.py when a GitHub release asset exists.
-  # Until then this is a head-only formula: brew install --HEAD cuda-mvcc
+  # Until then this is a head-only formula: brew install --HEAD doximity/mvcc/cuda-mvcc
   # brew-stable:end
   license "Apache-2.0"
 
