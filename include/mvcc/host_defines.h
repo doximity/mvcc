@@ -59,8 +59,8 @@ template <class T> struct shared_storage {
 #define __MVCC__ 1
 #endif
 #define MVCC_VERSION_MAJOR 1
-#define MVCC_VERSION_MINOR 0
-#define MVCC_VERSION_PATCH 1
+#define MVCC_VERSION_MINOR 1
+#define MVCC_VERSION_PATCH 0
 
 // Values mirroring what nvcc reports; needed by code that checks them.
 #ifndef CUDA_VERSION

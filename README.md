@@ -79,7 +79,7 @@ The driver accepts nvcc's command line, including the options CMake generates. O
 - NVIDIA's debugging and profiling tools (cuda-gdb, compute-sanitizer, Nsight) cannot be used. Device-side `printf` prints nothing, and the profiler API calls do nothing.
 - Apple GPUs have no fp64 hardware. fp64 arithmetic is emulated in software and is much slower than fp32.
 - Tensor-core code is fast only when mvcc recovers the matrix product its loop computes (see [Tensor cores](#tensor-cores)). Code it does not recognize runs as an exact translation, which is correct but much slower.
-- This is the first public release, tested with the programs in `tests/` and `examples/`. Code that uses a feature outside the [supported CUDA surface](#supported-cuda-surface) fails to build, with an error that names the feature.
+- This is an early release, tested with the programs in `tests/` and `examples/`. Code that uses a feature outside the [supported CUDA surface](#supported-cuda-surface) fails to build, with an error that names the feature.
 
 Behavior that differs from CUDA on NVIDIA hardware is described under [Differences from CUDA](#differences-from-cuda).
 
