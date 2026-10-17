@@ -8,12 +8,9 @@ No NVIDIA software is involved at build or run time. There is no CUDA toolkit, d
 
 - An Apple silicon Mac running macOS 26
 - Xcode Command Line Tools
-- Homebrew `llvm` 21 or later (clang with the NVPTX backend), `cmake` and `ninja`
-- Rust, installed with [rustup](https://rustup.rs)
+- [Homebrew](https://brew.sh)
 
 ## Install
-
-From Homebrew, once a release has been published and `Formula/cuda-mvcc.rb` carries its checksum (`tools/update_brew_formula.py`):
 
 ```bash
 brew tap doximity/mvcc https://github.com/doximity/mvcc
@@ -21,22 +18,7 @@ brew install doximity/mvcc/cuda-mvcc
 nvcc --version
 ```
 
-Until that checksum is filled in, the formula is head-only and builds from source (Homebrew `llvm`, `cmake`, `ninja` and `rust`):
-
-```bash
-brew tap doximity/mvcc https://github.com/doximity/mvcc
-brew install --HEAD doximity/mvcc/cuda-mvcc
-```
-
-Homebrew loads formulae from a third-party tap only once they are trusted. Installing by the fully qualified name `doximity/mvcc/cuda-mvcc` trusts this formula (`brew trust` lists it), so later `brew upgrade` runs work with the short name.
-
-The formula keeps the toolkit in `$(brew --prefix cuda-mvcc)/libexec` and links only `nvcc` and `mvcc` into Homebrew's `bin`, so its CUDA headers and libraries stay out of the shared `include` and `lib` directories. CMake finds the toolkit through the linked `nvcc`, and `brew info cuda-mvcc` prints the CMake flags. `libcudart`'s install name is the absolute path `$(brew --prefix cuda-mvcc)/libexec/lib64/libcudart.dylib`, so a program does not search the working directory or `@rpath` for the runtime. `nvcc` loads `mvcc-ir2msl` and `libmvcc-passes` only from that same toolkit (a symlink to a tool outside it is refused). It does not pass `DYLD_*`, `CPATH`, or `LIBRARY_PATH` through to clang, and the prefix install signs the toolchain with the hardened runtime.
-
-A build of mvcc works only with clang from the LLVM major release it was built against, because clang loads mvcc's device pass. `version.json` records that release (`"llvm"`). `nvcc` uses `llvm@<major>` if it is installed, then Homebrew `llvm`, and otherwise stops with an error naming both versions. When Homebrew's `llvm` moves to a newer major, `brew install llvm@<major>` keeps an installed release working.
-
-To publish a release: `tools/release.sh`, attach `dist/mvcc-<version>-macos-arm64.tar.gz` to a GitHub release tagged `v<version>`, and let `.github/workflows/brew.yml` open the formula pull request (or run `tools/update_brew_formula.py` on that tarball yourself).
-
-From a clone:
+To build from source instead:
 
 ```bash
 brew install llvm cmake ninja rust
@@ -47,8 +29,6 @@ export PATH="$PWD/toolkit/bin:$PATH"
 nvcc --version
 ```
 
-`tools/install_toolkit.sh` builds the compiler and runtime into `toolkit/`, which is laid out like a CUDA 12.8 installation so that CMake's `enable_language(CUDA)` and `find_package(CUDAToolkit)` work unchanged. `nvcc --version` identifies the build as `mvcc_<version>_0`.
-
 ## Usage
 
 Use the toolkit's `nvcc` as you would NVIDIA's:
@@ -58,13 +38,10 @@ nvcc -O3 -std=c++17 -o app app.cu
 ./app
 ```
 
-For a CMake project, point CMake at the toolkit:
+For a CMake project:
 
 ```bash
-cmake -S . -B build \
-  -DCMAKE_CUDA_COMPILER=/path/to/mvcc/toolkit/bin/nvcc \
-  -DCUDAToolkit_ROOT=/path/to/mvcc/toolkit \
-  -DCMAKE_CUDA_ARCHITECTURES=89
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=89
 cmake --build build
 ```
 
