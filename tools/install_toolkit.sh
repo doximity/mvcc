@@ -36,6 +36,15 @@ put() { rm -f "$2"; cp "$1" "$2"; }
 put "$OUT/mvcc" "$TK/bin/mvcc"
 ln -sfn mvcc "$TK/bin/nvcc"
 put "$ROOT/build/mvcc-llvm/mvcc-ir2msl" "$TK/bin/mvcc-ir2msl"
+# LLVM links z3 by its soname (libz3.5.1.dylib). A newer Homebrew z3 has libz3.dylib and not that file.
+z3_old="$(otool -L "$TK/bin/mvcc-ir2msl" | awk 'NR>1 && index($1, "/z3/") { print $1; exit }')"
+if [ -n "$z3_old" ]; then
+  z3_new="$(dirname "$z3_old")/libz3.dylib"
+  if [ -e "$z3_new" ] && [ "$z3_old" != "$z3_new" ]; then
+    install_name_tool -change "$z3_old" "$z3_new" "$TK/bin/mvcc-ir2msl"
+    codesign --force --sign - "$TK/bin/mvcc-ir2msl"
+  fi
+fi
 put "$ROOT/build/mvcc-llvm/libmvcc-passes.dylib" "$TK/lib64/libmvcc-passes.dylib"   # clang -fpass-plugin for the device pass
 put "$ROOT/build/mvcc-mslc" "$TK/bin/mvcc-mslc"
 cp -f "$ROOT/msl/mvcc_prelude.metal" "$TK/share/mvcc/mvcc_prelude.metal"

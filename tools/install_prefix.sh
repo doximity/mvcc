@@ -87,8 +87,10 @@ fi
 
 # mvcc-ir2msl records the build machine's Homebrew z3 and zstd. Point them at this machine's opt libs
 # when the caller says where those are (the formula sets MVCC_Z3_LIB / MVCC_ZSTD_LIB).
+# prefer=generic keeps libz3.dylib. Homebrew's z3 install name is the soname (libz3.5.1.dylib), and that
+# file is gone two z3 releases later; libz3.dylib is the name that still loads.
 relink() {
-  local file="$1" dest_dir="$2" needle="$3" generic="$4"
+  local file="$1" dest_dir="$2" needle="$3" generic="$4" prefer="${5:-soname}"
   [ -n "$dest_dir" ] || return 0
   local lib base target
   while IFS= read -r lib; do
@@ -99,7 +101,9 @@ relink() {
     case "$lib" in
       *"$needle"*)
         base="$(basename "$lib")"
-        if [ -e "$dest_dir/$base" ]; then target="$dest_dir/$base"
+        target=""
+        if [ "$prefer" = generic ] && [ -e "$dest_dir/$generic" ]; then target="$dest_dir/$generic"
+        elif [ -e "$dest_dir/$base" ]; then target="$dest_dir/$base"
         elif [ -e "$dest_dir/$generic" ]; then target="$dest_dir/$generic"
         else echo "install_prefix: $dest_dir has neither $base nor $generic" >&2; exit 1; fi
         case "$target" in
@@ -113,7 +117,7 @@ relink() {
     esac
   done < <(otool -L "$file" | awk 'NR>1 {print $1}')
 }
-relink "$DEST/bin/mvcc-ir2msl" "${MVCC_Z3_LIB:-}" "/z3/" "libz3.dylib"
+relink "$DEST/bin/mvcc-ir2msl" "${MVCC_Z3_LIB:-}" "/z3/" "libz3.dylib" generic
 relink "$DEST/bin/mvcc-ir2msl" "${MVCC_ZSTD_LIB:-}" "/zstd/" "libzstd.dylib"
 
 # Hardened runtime blocks DYLD_INSERT_LIBRARIES. Library validation is off so Homebrew z3/zstd still load.
