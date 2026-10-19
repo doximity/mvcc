@@ -2,8 +2,8 @@ class CudaMvcc < Formula
   desc "CUDA C++ compiler and runtime for Apple silicon"
   homepage "https://github.com/doximity/mvcc"
   # brew-stable:begin
-  url "https://github.com/doximity/mvcc/releases/download/v1.1.0/mvcc-1.1.0-macos-arm64.tar.gz"
-  sha256 "0fc5e105d58341f6f4f4541a4e4ce4f41360a6fe42c950264bb40c9ec75acf4f"
+  url "https://github.com/doximity/mvcc/releases/download/v1.1.1/mvcc-1.1.1-macos-arm64.tar.gz"
+  sha256 "82f67182a2f5116d826081271d7b03751c9d224c1612e2052eb8a47dfab1541c"
   # brew-stable:end
   license "Apache-2.0"
 
