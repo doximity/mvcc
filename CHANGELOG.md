@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- `mvcc-ir2msl` loads Homebrew Z3 through `libz3.dylib` instead of the versioned soname (`libz3.5.1.dylib`). A newer `z3` keg no longer leaves `nvcc` unable to start.
+
 ## 1.1.0
 
 - Publish the toolkit as the Homebrew formula `cuda-mvcc` (`Formula/cuda-mvcc.rb`), which keeps the toolkit in `libexec` and links only `nvcc` and `mvcc`. A release asset tagged `v<version>` updates the formula's checksum. The release workflow accepts only a `vX.Y.Z` tag, and the formula text is filled from that restricted alphabet. A prefix install refuses a world-writable destination, a symlink that leaves the prefix, and a non-absolute `libcudart` install name, and ad-hoc signs the toolchain with the hardened runtime. The compiler drops `DYLD_*`, `CPATH`, and `LIBRARY_PATH` before it runs clang.
