@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A stream's command buffer also commits once its estimated GPU time reaches about a second, the estimate being the threads it launched times the GPU ns per thread measured on the stream's completed buffers. A long prefill on a throttled GPU packed 512 heavy launches into one buffer, and macOS aborted it (`kIOGPUCommandBufferCallbackErrorTimeout`), which surfaced as an illegal memory access. Decode-sized buffers are unchanged.
+- A host wait faults only after 30 s in which none of the stream's command buffers completed. It used to give all of a stream's queued work 8 s, so a slow but progressing GPU read as a wedge.
+
 ## 1.1.1
 
 - `mvcc-ir2msl` loads Homebrew Z3 through `libz3.dylib` instead of the versioned soname (`libz3.5.1.dylib`). A newer `z3` keg no longer leaves `nvcc` unable to start.
