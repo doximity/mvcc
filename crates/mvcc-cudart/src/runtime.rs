@@ -4,7 +4,7 @@ use crate::error::*;
 use crate::memory::{Allocator, Loc};
 use crate::metal::{self, Buffer, CmdBuf, Device, Encoder, Queue, Residency, SharedEvent};
 use crate::module::{KernelPipeline, KernelRef, Module};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -13,7 +13,15 @@ pub const STREAM_PER_THREAD: u64 = 2;
 const COMMIT_THRESHOLD: u32 = 512;
 /// After a host sync the GPU would otherwise sit idle for a full threshold's worth of encoding (~0.4 ms of a decode step).
 const COMMIT_FIRST: u32 = 32;
-const GPU_WAIT_MS: i64 = 8000;
+/// GPU time a command buffer is sized for. macOS aborts a command buffer that runs for seconds
+/// (kIOGPUCommandBufferCallbackErrorTimeout), and a long prefill's launches on a slow GPU reach that well inside
+/// COMMIT_THRESHOLD ops; CUDA has no such limit, so the buffer commits early instead.
+const COMMIT_TARGET_NS: f64 = 1e9;
+/// Committed buffers kept per stream to learn the GPU time per launched thread from.
+const COST_SAMPLES: usize = 64;
+/// How long a host wait goes with no command buffer of the stream completing before the stream counts as wedged. A
+/// slow device (emulated tensor tiles on a throttled GPU) keeps waiting as long as buffers keep completing.
+const GPU_WAIT_MS: i64 = 30000;
 const MALLOC_BUDGET_FRAC: f64 = 0.97;
 
 fn commit_threshold() -> u32 { COMMIT_THRESHOLD }
@@ -47,6 +55,8 @@ struct Open {
     enc: Option<Encoder>,
     enc_fence: Arc<metal::Fence>,
     ops: u32,
+    /// threads launched into the buffer (grid x block summed over its kernels)
+    threads: u64,
     /// buffers that must outlive this command buffer (staging copies)
     keepalive: Vec<Arc<Buffer>>,
 }
@@ -82,6 +92,10 @@ pub struct Stream {
     /// ops the open buffer commits at: commit_first() when the GPU had drained this stream's work when the
     /// buffer opened, else commit_threshold()
     commit_at: u32,
+    /// committed buffers and their launched threads, oldest first, until they complete and are measured
+    in_flight: VecDeque<(Arc<CmdBuf>, u64)>,
+    /// GPU ns per launched thread over the measured buffers (0 until one is measured)
+    ns_per_thread: f64,
 }
 
 struct Rec {
@@ -209,7 +223,7 @@ impl Runtime {
             id, queue: self.dev.new_queue(Some(&self.res)), non_blocking, priority, open: None,
             fence: Arc::new(self.dev.new_shared_event()), enc_fence: Arc::new(self.dev.new_fence()), fence_value: 0, last_committed: None, pending_waits: Vec::new(),
             host_fence: Arc::new(self.dev.new_shared_event()), host_fence_value: 0, retired: Vec::new(), capture: None, waited: HashMap::new(),
-            commit_at: commit_first(),
+            commit_at: commit_first(), in_flight: VecDeque::new(), ns_per_thread: 0.0,
         };
         self.streams.insert(id, s);
     }
@@ -266,7 +280,7 @@ impl Runtime {
         // drop staging buffers of completed work
         let done = s.fence.value();
         s.retired.retain(|(v, _)| *v > done);
-        s.open = Some(Open { cb, enc: None, enc_fence: s.enc_fence.clone(), ops: 0, keepalive: Vec::new() });
+        s.open = Some(Open { cb, enc: None, enc_fence: s.enc_fence.clone(), ops: 0, threads: 0, keepalive: Vec::new() });
     }
 
     fn encoder(&mut self, id: u64) -> &Encoder {
@@ -297,20 +311,32 @@ impl Runtime {
         b.update_fence(&o.enc_fence);
         b.end();
     }
-    fn bump_ops(&mut self, id: u64) {
-        let (ops, at) = {
+    fn bump_ops(&mut self, id: u64, threads: u64) {
+        let (ops, at, over) = {
             let s = self.streams.get_mut(&id).unwrap();
+            while s.in_flight.front().map(|(c, _)| c.status() >= 2).unwrap_or(false) {
+                let (c, n) = s.in_flight.pop_front().unwrap();
+                let ns = (c.gpu_end() - c.gpu_start()) * 1e9;
+                if c.status() == 2 && n > 0 && ns > 0.0 {
+                    let rate = ns / n as f64;
+                    // Up at once, down gradually: an underestimate is the one that costs a buffer.
+                    s.ns_per_thread = if rate > s.ns_per_thread { rate } else { 0.75 * s.ns_per_thread + 0.25 * rate };
+                }
+            }
+            let rate = s.ns_per_thread;
             let o = s.open.as_mut().unwrap();
             o.ops += 1;
+            o.threads += threads;
+            let over = rate > 0.0 && o.threads as f64 * rate >= COMMIT_TARGET_NS;
             if o.ops == 1 {
                 // First op of the buffer: if the GPU has finished everything this stream committed, it is
                 // idle and waiting on us; start over with a small buffer.
                 let drained = s.last_committed.as_ref().map(|c| c.status() >= 2).unwrap_or(true);
                 s.commit_at = if drained { commit_first() } else { commit_threshold() };
             }
-            (o.ops, s.commit_at.max(1))
+            (o.ops, s.commit_at.max(1), over)
         };
-        if ops >= at { self.commit(id); }
+        if ops >= at || over { self.commit(id); }
     }
     fn keepalive(&mut self, id: u64, b: Arc<Buffer>) {
         if let Some(o) = self.streams.get_mut(&id).unwrap().open.as_mut() { o.keepalive.push(b); }
@@ -325,6 +351,8 @@ impl Runtime {
         o.cb.signal(&s.fence, s.fence_value);
         o.cb.commit();
         if !o.keepalive.is_empty() { s.retired.push((s.fence_value, std::mem::take(&mut o.keepalive))); }
+        if s.in_flight.len() == COST_SAMPLES { s.in_flight.pop_front(); }
+        s.in_flight.push_back((o.cb.clone(), o.threads));
         s.last_committed = Some(o.cb.clone());
     }
     fn commit_with_handler(&mut self, id: u64, cb_fn: extern "C" fn(*mut c_void, i32), ctx: *mut c_void) {
@@ -344,6 +372,16 @@ impl Runtime {
         }
         SUCCESS
     }
+    /// Wait for `fence` to reach `value` in timed slices, for as long as it advances between slices.
+    fn wait_fence(fence: &SharedEvent, value: u64) -> bool {
+        let mut seen = fence.value();
+        loop {
+            if fence.wait(value, gpu_wait_ms()) { return true; }
+            let now = fence.value();
+            if now == seen { return false; }
+            seen = now;
+        }
+    }
     /// Wait for a stream's last command buffer without `waitUntilCompleted`.
     /// A timed shared-event wait returns on fault or wedge; an infinite Metal
     /// wait on a wedged buffer can take down the machine.
@@ -353,10 +391,10 @@ impl Runtime {
         let (fence, value, cb) = (s.fence.clone(), s.fence_value, s.last_committed.clone());
         let Some(cb) = cb else { return SUCCESS; };
         if cb.status() >= 2 { return self.check_cb(&cb); }
-        let signaled = if value > 0 { fence.wait(value, gpu_wait_ms()) } else { false };
+        let signaled = if value > 0 { Self::wait_fence(&fence, value) } else { false };
         if cb.status() >= 2 { return self.check_cb(&cb); }
         if signaled { return SUCCESS; }
-        let msg = format!("GPU wait timed out after {} ms (command buffer still in flight)", gpu_wait_ms());
+        let msg = format!("GPU wait timed out: no command buffer completed in {} ms (command buffer still in flight)", gpu_wait_ms());
         eprintln!("[MVCC] {}", msg);
         self.failed = Some(msg);
         ILLEGAL_ADDRESS
@@ -459,11 +497,11 @@ impl Runtime {
         if let Some(cb) = self.streams.get(&sid).and_then(|s| s.last_committed.clone()) {
             if cb.status() >= 2 { return self.check_cb(&cb); }
         }
-        if !f.wait(v, gpu_wait_ms()) {
+        if !Self::wait_fence(&f, v) {
             if let Some(cb) = self.streams.get(&sid).and_then(|s| s.last_committed.clone()) {
                 if cb.status() >= 2 { return self.check_cb(&cb); }
             }
-            let msg = format!("GPU event wait timed out after {} ms", gpu_wait_ms());
+            let msg = format!("GPU event wait timed out: no command buffer completed in {} ms", gpu_wait_ms());
             eprintln!("[MVCC] {}", msg);
             self.failed = Some(msg);
             return ILLEGAL_ADDRESS;
@@ -897,7 +935,8 @@ impl Runtime {
         if barrier { enc.barrier(); }  // CUDA stream order: the next kernel sees this one's writes
         if zero.is_some() { self.zero_page = zero; }
         if locks.is_some() { self.lock_page = locks; }
-        self.bump_ops(sid);
+        let threads = grid.iter().chain(block.iter()).map(|&d| d as u64).product();
+        self.bump_ops(sid, threads);
     }
 
     /// The spill pool for launches needing `smem` bytes of shared memory per block: header (slot count, stride,
