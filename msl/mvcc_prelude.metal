@@ -716,6 +716,27 @@ inline void __mvcc_tp_frag2slot(thread uint* w, uint f0, uint f1, uint f2, uint 
   else           { w[0] = hi ? p1 : p0; w[1] = hi ? q1 : q0; w[2] = hi ? p3 : p2; w[3] = hi ? q3 : q2; }
 }
 
+// 8-bit operand blocks (m16n8k32 s8/u8): one 16-row x 32-k block per k-step, 16 slots per lane, 4 per word. The
+// law is the 16-bit one per element (R x 32), so slot quad j of lane l is row base + 8(j&1), k bytes 4kq + 16(j>>1)
+// with base = ((l>>1)&3)|((l>>4)<<2), kq = (l&1)|((l>>3)&1)<<1: exactly the PTX word j of lane 4*base + kq (A: a_j;
+// B: x.b0, y.b0, x.b1, y.b1). __mvcc_tp_fill8 reads it at the non-.trans ldmatrix row addresses (block r: A
+// (row>=8) + 2(k>=16), B 2(n>=8) + (k>=16)); __mvcc_tp_f2s8 moves register words with 4 shuffles.
+inline void __mvcc_tp_fill8(thread uint* w, ulong addr, uint lane, int kind, uint blockmap) {
+  const uint base = ((lane >> 1) & 3u) | ((lane >> 4) << 2), kq = (lane & 1u) | (((lane >> 3) & 1u) << 1);
+  const uint2 h = as_type<uint2>(addr);
+  for (uint j = 0; j < 4; j++) {
+    const uint r = kind == 0 ? j : 2u * (j & 1u) + (j >> 1);
+    const ushort src = (ushort)(8u * ((blockmap >> (2u * r)) & 3u) + ((base + 8u * (j & 1u)) & 7u));
+    const uint2 ra = uint2(simd_shuffle(h.x, src), simd_shuffle(h.y, src));
+    w[j] = *(__MVCC_SMEM uint*)(as_type<ulong>(ra) + ((4u * kq + 16u * (j >> 1)) & 15u));
+  }
+}
+inline void __mvcc_tp_f2s8(thread uint* w, uint f0, uint f1, uint f2, uint f3, uint lane, int kind) {
+  const ushort src = (ushort)(4u * (((lane >> 1) & 3u) | ((lane >> 4) << 2)) + (lane & 1u) + 2u * ((lane >> 3) & 1u));
+  const uint p0 = simd_shuffle(f0, src), p1 = simd_shuffle(f1, src), p2 = simd_shuffle(f2, src), p3 = simd_shuffle(f3, src);
+  w[0] = p0; w[1] = kind == 0 ? p1 : p2; w[2] = kind == 0 ? p2 : p1; w[3] = p3;
+}
+
 // Level 4 direct fills (staging_layout.cpp): the compiler re-evaluates the ldmatrix address expression for the
 // lane whose row feeds slot quad j (__mvcc_tp_srclane), so the fill loads straight from that address: no shuffles.
 inline uint __mvcc_tp_srclane(uint lane, int j, int kind, int trans, uint blockmap) {
@@ -806,6 +827,20 @@ inline void __mvcc_tp_mma(thread float* d, const thread uint* a, const thread ui
   __mvcc_static_for<0, M * K / 64>([&](auto i) { metal::vec<T, 2> v = as_type<metal::vec<T, 2>>(a[i.value]); ca[2 * i.value] = v[0]; ca[2 * i.value + 1] = v[1]; });
   __mvcc_static_for<0, K * N / 64>([&](auto i) { metal::vec<T, 2> v = as_type<metal::vec<T, 2>>(b[i.value]); cb[2 * i.value] = v[0]; cb[2 * i.value + 1] = v[1]; });
   auto ct = op.template get_destination_cooperative_tensor<decltype(ca), decltype(cb), float>();
+  __mvcc_static_for<0, M * N / 32>([&](auto i) { ct[i.value] = c[i.value]; });
+  op.run(ca, cb, ct);
+  __mvcc_static_for<0, M * N / 32>([&](auto i) { d[i.value] = ct[i.value]; });
+}
+// 8-bit inputs, int32 accumulate: a = M*K/128 words, b = K*N/128 words, 4 slots each.
+template <typename T, int M, int N, int K>
+inline void __mvcc_tp_mma8(thread int* d, const thread uint* a, const thread uint* b, const thread int* c) {
+  constexpr auto desc = mpp::tensor_ops::matmul2d_descriptor(M, N, K, false, true, false, mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate);
+  mpp::tensor_ops::matmul2d<desc, metal::execution_simdgroups<1>> op;
+  auto ca = op.template get_left_input_cooperative_tensor<T, T, int>();
+  auto cb = op.template get_right_input_cooperative_tensor<T, T, int>();
+  __mvcc_static_for<0, M * K / 128>([&](auto i) { metal::vec<T, 4> v = as_type<metal::vec<T, 4>>(a[i.value]); __mvcc_static_for<0, 4>([&](auto e) { ca[4 * i.value + e.value] = v[e.value]; }); });
+  __mvcc_static_for<0, K * N / 128>([&](auto i) { metal::vec<T, 4> v = as_type<metal::vec<T, 4>>(b[i.value]); __mvcc_static_for<0, 4>([&](auto e) { cb[4 * i.value + e.value] = v[e.value]; }); });
+  auto ct = op.template get_destination_cooperative_tensor<decltype(ca), decltype(cb), int>();
   __mvcc_static_for<0, M * N / 32>([&](auto i) { ct[i.value] = c[i.value]; });
   op.run(ca, cb, ct);
   __mvcc_static_for<0, M * N / 32>([&](auto i) { d[i.value] = ct[i.value]; });

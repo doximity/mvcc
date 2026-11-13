@@ -120,6 +120,15 @@ if MVCC_TENSOR_DIAG=1 nvcc -O2 -std=c++17 -o "$OUT/gemm_dev" "$ROOT/tests/kernel
   if grep -q 'stays a register fragment\|recognized but not recovered' "$OUT/gemm_dev.build.log"; then bad "gemm_dev: a fragment was not read from memory (see $OUT/gemm_dev.build.log)"; fi
   tensor_runs gemm_dev
 else bad "gemm_dev: compile (see $OUT/gemm_dev.build.log)"; fi
+# s8 fragments from ldmatrix and computed in registers: cooperative 8-bit operands
+if MVCC_TENSOR_DIAG=1 nvcc -O2 -std=c++17 -o "$OUT/gemm_i8" "$ROOT/tests/kernels/gemm_i8.cu" >"$OUT/gemm_i8.build.log" 2>&1; then
+  for op in int8_t_32x32x32_tl0_tr1 int8_t_16x16x32_tl0_tr1; do
+    if grep -q "into matmul2d $op\$" "$OUT/gemm_i8.build.log"; then ok "gemm_i8: $op recovered";
+    else bad "gemm_i8: $op not recovered (see $OUT/gemm_i8.build.log)"; fi
+  done
+  if grep -q 'recognized but not recovered' "$OUT/gemm_i8.build.log"; then bad "gemm_i8: a kernel was not recovered (see $OUT/gemm_i8.build.log)"; fi
+  tensor_runs gemm_i8
+else bad "gemm_i8: compile (see $OUT/gemm_i8.build.log)"; fi
 step "semantic iteration graph, coordinate discovery, STIR (golden)"
 # the SIG summary, the discovered coordinates and the STIR text of every kernel in the corpus must match
 # tests/stir/*.golden exactly (loop classes, recurrence algebras and permissions, fitted sites, round-trip counts).

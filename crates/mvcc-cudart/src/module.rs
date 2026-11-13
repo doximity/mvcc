@@ -384,8 +384,8 @@ impl Module {
         for v in &verifies {
             let (m, n, k) = (v.m as usize, v.n as usize, v.k as usize);
             let cap = m * n / 32;
-            if v.dev {
-                // device operands: A [m][k] and B [n][k] (k contiguous) at a row pitch of k + 16 elements; the padding
+            if v.dev || v.ty == "s8" || v.ty == "u8" {
+                // device operands (and 8-bit cooperative ones, staged by the kernel itself): A [m][k] and B [n][k] (k contiguous) at a row pitch of k + 16 elements; the padding
                 // holds 7s, which would show up in the product if the matmul read past k
                 let int = v.ty == "s8" || v.ty == "u8";
                 let (ld, esz) = (k + 16, if int { 1 } else { 2 });

@@ -85,7 +85,7 @@ Tensor-core code (`mma.sync`, `ldmatrix`, `cp.async`) has an exact translation b
 
 mvcc works from the whole loop instead. It recovers the matrix product the loop computes, proves that a Metal 4 `matmul2d` on cooperative tensors computes the same result, and emits that. Every recovered kernel is also compiled as an exact translation of the original code. The runtime uses the exact version when the GPU does not support Metal 4, when on-device layout verification fails, or when a launch shape is outside what the proof covers. `MVCC_TENSOR_DIAG=1` reports what recovery did for each kernel, and `MVCC_TENSOR_EXACT=1` runs the exact versions.
 
-`matmul2d` and the `mma.sync` translation round as Apple's matrix units do, so a sum that is not exact in fp32 can differ from an NVIDIA GPU in the last place. When every product and partial sum is exact (integer-valued operands whose sums stay below 2^24 in magnitude), both give the same bits.
+`matmul2d` and the `mma.sync` translation round as Apple's matrix units do, so a sum that is not exact in fp32 can differ from an NVIDIA GPU in the last place. When every product and partial sum is exact (integer-valued operands whose sums stay below 2^24 in magnitude), both give the same bits. s8 and u8 `mma.sync` accumulate in int32, which is exact at any K, and are recovered from `ldmatrix` and register-built fragments as well as from memory.
 
 For new code, `mvcc::warp_tile` in `include/mvcc/tile.cuh` is a portable warp-level matrix-multiply API. It compiles to `mma.sync` with NVIDIA's `nvcc` and to `matmul2d` with mvcc.
 

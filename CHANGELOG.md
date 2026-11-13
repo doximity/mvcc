@@ -3,6 +3,7 @@
 ## 1.3.0
 
 - Removed `MVCC_PORTABLE_NUMERICS`. Its NVIDIA tensor-core rounding ran f16/bf16 `mma.sync` on the ALUs, about 80 times slower than `matmul2d`. Code that needs the same bits as an NVIDIA GPU keeps its tensor-core sums exact instead (README.md).
+- s8 and u8 `mma.sync` fed by `ldmatrix` or by fragments computed in registers are recovered onto `matmul2d`. They used to be recovered only when every fragment was a plain load from memory, so a kernel that slices or quantizes its operands in registers ran each `mma.sync` on the ALUs. 8-bit cooperative tensors follow the same layout law as half, four elements to a 32-bit word; the runtime verifies it on the device. `tests/kernels/gemm_i8.cu`.
 
 ## 1.2.0
 
