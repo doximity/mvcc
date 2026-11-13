@@ -1413,7 +1413,6 @@ void KernelRecovery::validateFixpoint() {
     }
     ops.swap(keep);
   }
-  for (auto& op : ops) sinkResultUses(op.get(), true);
 }
 
 // The fused op runs at its last mma. Arithmetic that reads a tile result earlier in that block (a kernel combining
@@ -1951,7 +1950,12 @@ void KernelRecovery::splitFp8Mmas() {
 bool KernelRecovery::run() {
   kname = demangle(F.getName().str());
   splitFp8Mmas();
-  if (!collect()) return false;
+  // exact twin before the analyses touch anything
+  ValueToValueMapTy VMap;
+  Function* twin = CloneFunction(&F, VMap);
+  twin->setName(F.getName() + "__mvcc_exact");
+  auto bail = [&] { twin->eraseFromParent(); return false; };
+  if (!collect()) return bail();
   res.kernelsWithMma++;
   analyzeChains();
   analyzeOperands();
@@ -1964,7 +1968,7 @@ bool KernelRecovery::run() {
     for (auto& m : mmas) if (!m->ok) reasons.insert(m->why);
     std::string r; for (auto& s : reasons) { if (!r.empty()) r += "; "; r += s; }
     warn("mma.sync recognized but not recovered (exact lowering kept): " + r);
-    return false;
+    return bail();
   }
   typeAccumulators();
   // check(P,S) before any IR: rewrite() is emit(P,S) for this contraction.
@@ -1975,15 +1979,12 @@ bool KernelRecovery::run() {
     legal::Result Lg = legal::check(GP, Sg);
     if (!Lg.ok) {
       warn("check+emit refused " + Lg.first() + " (exact twin)");
-      return false;
+      return bail();
     }
     note("check+emit: tensor-op " + Lg.first() + " " + sched::stageShape(Sg));
   }
-  // exact twin before touching anything
-  ValueToValueMapTy VMap;
-  Function* twin = CloneFunction(&F, VMap);
-  twin->setName(F.getName() + "__mvcc_exact");
   res.exactVariants.push_back({F.getName().str(), twin->getName().str()});
+  for (auto& op : ops) sinkResultUses(op.get(), true);
   rewrite();
   unsigned nm = 0; for (auto& m : mmas) if (m->ok) nm++;
   unsigned left = 0; for (auto& m : mmas) if (!m->ok) left++;

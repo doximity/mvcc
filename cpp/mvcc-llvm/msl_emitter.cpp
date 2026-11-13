@@ -2278,6 +2278,13 @@ void Emitter::emitInst(Instruction& I) {
       case Instruction::URem: set(a + " % " + b); return;
       case Instruction::SDiv: set("(" + ty(T) + ")((" + sty(T) + ")" + a + " / (" + sty(T) + ")" + b + ")"); return;
       case Instruction::SRem: set("(" + ty(T) + ")((" + sty(T) + ")" + a + " % (" + sty(T) + ")" + b + ")"); return;
+      // an oversized LLVM shift is poison (often speculated, then not selected); in MSL it is UB the compiler exploits
+      case Instruction::Shl: case Instruction::LShr: case Instruction::AShr:
+        if (!isa<ConstantInt>(BO->getOperand(1)) && !isBool) b = "(" + b + " & " + std::to_string(T->getScalarSizeInBits() - 1) + ")";
+        break;
+      default: break;
+    }
+    switch (BO->getOpcode()) {
       case Instruction::Shl: set("(" + ty(T) + ")(" + a + " << " + b + ")"); return;
       case Instruction::LShr: set(a + " >> " + b); return;
       case Instruction::AShr: set("(" + ty(T) + ")((" + sty(T) + ")" + a + " >> " + b + ")"); return;
