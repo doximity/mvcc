@@ -4,7 +4,8 @@
     tools/update_brew_formula.py dist/mvcc-1.0.1-macos-arm64.tar.gz
 
 The tarball is the one tools/release.sh writes. Publish it as a GitHub release asset named
-mvcc-<version>-macos-arm64.tar.gz on tag v<version>, then run this and commit the formula.
+mvcc-<version>-macos-arm64.tar.gz on tag v<version>. The release workflow runs this and
+commits the formula on master.
 """
 from __future__ import annotations
 
