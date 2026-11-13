@@ -1423,6 +1423,10 @@ bool KernelRecovery::sinkResultUses(FusedOp* op, bool apply) {
   Instruction* ip = op->lastMma->CI;
   BasicBlock* BB = ip->getParent();
   std::set<Instruction*> calls, moved;
+  auto opOfMma = [&](Instruction* I) -> FusedOp* {
+    for (auto& o : ops) if (o.get() != op) for (auto& a : o->m) for (auto& b : a) for (MmaRec* m : b) if (m && m->CI == I) return o.get();
+    return nullptr;
+  };
   std::vector<Instruction*> work;
   for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) calls.insert(m->CI);
   for (auto& a : op->m) for (auto& b : a) if (MmaRec* m = b.back()) for (auto* d : m->d) if (d) for (User* U : d->users()) work.push_back(cast<Instruction>(U));
@@ -1430,6 +1434,10 @@ bool KernelRecovery::sinkResultUses(FusedOp* op, bool apply) {
     Instruction* I = work.back(); work.pop_back();
     if (isa<PHINode>(I) || I->getParent() != BB || !I->comesBefore(ip) || moved.count(I)) continue;  // a phi reads over its edge
     if (calls.count(I)) return false;
+    if (FusedOp* o = opOfMma(I)) {  // a later batch's chain head: it takes the result as C where it is inserted
+      if (o->lastMma->CI->getParent() == BB && ip->comesBefore(o->lastMma->CI)) continue;
+      return false;
+    }
     if (auto* CI = dyn_cast<CallInst>(I)) {
       Function* Fn = CI->getCalledFunction();
       const StringRef n = Fn ? Fn->getName() : "";
