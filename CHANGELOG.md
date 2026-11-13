@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0
+
+- Removed `MVCC_PORTABLE_NUMERICS`. Its NVIDIA tensor-core rounding ran f16/bf16 `mma.sync` on the ALUs, about 80 times slower than `matmul2d`. Code that needs the same bits as an NVIDIA GPU keeps its tensor-core sums exact instead (README.md).
+
 ## 1.2.0
 
 - `a * b + c` that clang marks `contract` fuses into one fma, which is what nvcc does with `-fmad=true`. The emitter used to write the multiply and the add separately, and Metal's safe math does not fuse them, so those expressions rounded twice and about 10% of random inputs differed in the last place from an A10G. `-fmad=false` compiles the device pass with `-ffp-contract=off`. float and half only: double is emulated and bfloat has no Metal fma.
