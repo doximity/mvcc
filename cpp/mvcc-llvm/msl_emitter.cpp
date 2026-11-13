@@ -3891,6 +3891,9 @@ void Emitter::run() {
   out += "#include <metal_stdlib>\n#include <metal_simdgroup_matrix>\nusing namespace metal;\n";
   out += "#define MVCC_PRELUDE_BEGIN\n";  // the driver splices the prelude in here
   for (auto& h : usedHelpers) out += "#define MVCC_NEED_" + h + " 1\n";
+#ifdef MVCC_PORTABLE_NUMERICS
+  out += "#define MVCC_PORTABLE_NUMERICS 1\n";
+#endif
   out += "#define MVCC_PRELUDE_END\n\n";
   out += typesOut + "\n" + globalsOut + "\n" + kernelsOut;
   res.msl = out;

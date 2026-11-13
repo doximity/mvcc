@@ -30,6 +30,10 @@
 #include <map>
 #include <optional>
 
+#ifndef MVCC_PORTABLE_NUMERICS
+#define MVCC_PORTABLE_NUMERICS 0
+#endif
+
 using namespace llvm;
 
 namespace mvcc {
@@ -577,7 +581,9 @@ bool KernelRecovery::collect() {
         rec->CI = CI;
         const bool fp = shape == "m16n8k16" && dt == "f32" && ct == "f32" && at == bt && (at == "f16" || at == "bf16");
         const bool i8 = shape == "m16n8k32" && dt == "s32" && ct == "s32" && at == bt && (at == "s8" || at == "u8") && !in.hasMod("satfinite");
-        if (!(fp || i8) || !in.hasMod("row") || !in.hasMod("col"))
+        if (fp && MVCC_PORTABLE_NUMERICS)  // matmul2d rounds as Apple's matrix units; the exact helper as NVIDIA's
+          rec->fail("mma variant " + in.full() + " keeps NVIDIA's rounding (MVCC_PORTABLE_NUMERICS)");
+        else if (!(fp || i8) || !in.hasMod("row") || !in.hasMod("col"))
           rec->fail("mma variant " + in.full() + " is not recoverable (TensorOps on this OS: f16/bf16 inputs with f32 accumulate, s8/u8 inputs with s32 accumulate and wrapping)");
         rec->type = at == "bf16" ? 1 : at == "s8" ? 2 : at == "u8" ? 3 : 0;
         if (CI->arg_size() != 10) rec->fail("unexpected mma operand count");

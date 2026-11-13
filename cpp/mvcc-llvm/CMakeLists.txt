@@ -23,6 +23,10 @@ add_executable(mvcc-ir2msl ir2msl.cpp msl_emitter.cpp msl_guarded.cpp ptx_asm.cp
 if(DEFINED LLVM_TOOLS_BINARY_DIR AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/llc")
   target_compile_definitions(mvcc-ir2msl PRIVATE MVCC_LLC="${LLVM_TOOLS_BINARY_DIR}/llc")
 endif()
+option(MVCC_PORTABLE_NUMERICS "f16/bf16 mma.sync rounds as NVIDIA tensor cores do (no matmul2d recovery for it)" OFF)
+if(MVCC_PORTABLE_NUMERICS)
+  target_compile_definitions(mvcc-ir2msl PRIVATE MVCC_PORTABLE_NUMERICS=1)
+endif()
 target_link_libraries(mvcc-ir2msl PRIVATE ${LLVM_LIBS})
 # Room for install_name_tool to retarget libz3 / libzstd when the binary is installed by Homebrew.
 target_link_options(mvcc-ir2msl PRIVATE -Wl,-headerpad_max_install_names)

@@ -15,7 +15,7 @@ echo "== cpp (mvcc-ir2msl, mvcc-passes)"
 if [ -n "${LLVM_DIR:-}" ]; then LLVM_CMAKE="$LLVM_DIR"
 elif [ -n "${MVCC_LLVM_PREFIX:-}" ]; then LLVM_CMAKE="$MVCC_LLVM_PREFIX/lib/cmake/llvm"
 else LLVM_CMAKE="$(brew --prefix llvm)/lib/cmake/llvm"; fi
-run_cmake -S "$ROOT/cpp/mvcc-llvm" -B "$ROOT/build/mvcc-llvm" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_CMAKE"
+run_cmake -S "$ROOT/cpp/mvcc-llvm" -B "$ROOT/build/mvcc-llvm" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_CMAKE" -DMVCC_PORTABLE_NUMERICS="${MVCC_PORTABLE_NUMERICS:-OFF}"
 run_cmake_build "$ROOT/build/mvcc-llvm" --target mvcc-ir2msl mvcc-passes
 
 echo "== objc tools (mvcc-mslc)"
