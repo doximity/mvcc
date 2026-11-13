@@ -1,9 +1,11 @@
 // mma.sync m16n8k16 with f32 accumulate must return an NVIDIA tensor core's bits, not just a close product: the
-// hashes are of an A10G's outputs (sm_86) on these seeded inputs, which span 25 binades with cancellation.
+// hashes are of an A10G's outputs (sm_86) on these seeded inputs, which span 25 binades with cancellation. mvcc returns
+// those bits under MVCC_PORTABLE_NUMERICS=1.
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -45,6 +47,7 @@ static uint64_t next() {
 static int range(int lo, int hi) { return lo + (int)(next() % (uint64_t)(hi - lo + 1)); }
 
 int main() {
+  setenv("MVCC_PORTABLE_NUMERICS", "1", 1);
   const uint64_t want[2] = {0xd970ab25f7b68aadull, 0xe79722894af5e279ull};
   int failures = 0;
   for (int f16 = 0; f16 < 2; ++f16) {

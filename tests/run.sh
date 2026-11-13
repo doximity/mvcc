@@ -57,7 +57,7 @@ elif [ -x "$ROOT/build/mvcc-prelude-test" ]; then
 else bad "prelude_test binary missing (run without --no-build)"; fi
 
 step "kernel tests (nvcc -> run)"
-for t in vector_add stream_order intrinsics warp_tile ranks device_graph_tail coherence shard_sched printf_shared globaltimer single_thread_order free_returns curand_philox fma_contract $(grep -q "MVCC_PORTABLE_NUMERICS:BOOL=ON" "$ROOT/build/mvcc-llvm/CMakeCache.txt" 2>/dev/null && echo mma_nvidia); do
+for t in vector_add stream_order intrinsics warp_tile ranks device_graph_tail coherence shard_sched printf_shared globaltimer single_thread_order free_returns curand_philox fma_contract mma_nvidia; do
   if nvcc -O2 -std=c++17 -o "$OUT/$t" "$ROOT/tests/kernels/$t.cu" >"$OUT/$t.build.log" 2>&1; then
     if [ "$HOST" = 1 ]; then ok "$t: compile"; else run "$t" "$OUT/$t"; fi
   else bad "$t: compile (see $OUT/$t.build.log)"; fi
