@@ -4,6 +4,10 @@
 
 - Removed `MVCC_PORTABLE_NUMERICS`. Its NVIDIA tensor-core rounding ran f16/bf16 `mma.sync` on the ALUs, about 80 times slower than `matmul2d`. Code that needs the same bits as an NVIDIA GPU keeps its tensor-core sums exact instead (README.md).
 - s8 and u8 `mma.sync` fed by `ldmatrix` or by fragments computed in registers are recovered onto `matmul2d`. They used to be recovered only when every fragment was a plain load from memory, so a kernel that slices or quantizes its operands in registers ran each `mma.sync` on the ALUs. 8-bit cooperative tensors follow the same layout law as half, four elements to a 32-bit word; the runtime verifies it on the device. `tests/kernels/gemm_i8.cu`.
+- Pure arithmetic that reads a tile result before the batch's last `mma.sync` (a kernel combining each tile's products as soon as they exist) moves after the fused op instead of failing LLVM's dominance check. Loop-carried phis and the chain heads of later batches along K stay in place.
+- `cudaFuncGetAttributes` reports the static shared memory of the body that runs, the recovered one with its conversion scratch included, so a launcher that checks the limit picks a geometry that fits instead of one that falls back to the exact twin.
+- A shift by a variable amount is emitted masked to the operand width. LLVM speculates shifts out of ternaries (an oversized shift is poison there, and the select discards it), but in MSL it is undefined behavior that Metal's compiler may exploit.
+- The exact twin is cloned before recovery analyses or rewrites the kernel.
 
 ## 1.2.0
 
