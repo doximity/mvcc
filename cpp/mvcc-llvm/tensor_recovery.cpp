@@ -1428,8 +1428,8 @@ bool KernelRecovery::sinkResultUses(FusedOp* op, bool apply) {
   for (auto& a : op->m) for (auto& b : a) if (MmaRec* m = b.back()) for (auto* d : m->d) if (d) for (User* U : d->users()) work.push_back(cast<Instruction>(U));
   while (!work.empty()) {
     Instruction* I = work.back(); work.pop_back();
-    if (I->getParent() != BB || !I->comesBefore(ip) || moved.count(I)) continue;
-    if (calls.count(I) || isa<PHINode>(I)) return false;
+    if (isa<PHINode>(I) || I->getParent() != BB || !I->comesBefore(ip) || moved.count(I)) continue;  // a phi reads over its edge
+    if (calls.count(I)) return false;
     if (auto* CI = dyn_cast<CallInst>(I)) {
       Function* Fn = CI->getCalledFunction();
       const StringRef n = Fn ? Fn->getName() : "";
