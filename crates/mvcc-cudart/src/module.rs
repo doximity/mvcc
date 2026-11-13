@@ -260,6 +260,12 @@ impl Module {
         match &k.exact_variant { Some(t) => self.kernel_abi(t).map(|a| a.static_smem.min(k.static_smem)).unwrap_or(k.static_smem), None => k.static_smem }
     }
 
+    /// Static shared memory of the body a launch normally runs: the recovered one (with its conversion scratch)
+    /// once the module's recovered kernels are enabled, else the floor.
+    pub fn static_smem_running(&self, name: &str) -> u32 {
+        match (&self.tensor_policy, self.kernel_abi(name)) { (Some(TensorPolicy::Recovered), Some(k)) => k.static_smem, _ => self.static_smem_floor(name) }
+    }
+
     /// Dynamic shared memory a host request of `requested` bytes actually costs: the proven footprint of the
     /// recovered body when layout recovery established one below the request (runtime.rs launches with it).
     pub fn effective_dyn_smem(&self, name: &str, requested: u32) -> u32 {

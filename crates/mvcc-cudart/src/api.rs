@@ -383,7 +383,7 @@ extern "C" fn stream_callback_trampoline(p: *mut c_void) {
     with(|r| {
         let (k, kp) = match r.kernel_pipeline(func as usize) { Ok(x) => x, Err(e) => return e };
         let static_floor = r.modules[k.module].static_smem_floor(&k.name);
-        let a = FuncAttributes { shared: static_floor as usize, const_: 0, local: 0, max_threads: kp.max_threads as c_int, num_regs: if kp.max_threads >= 1024 { 32 } else { 128 }, ptx: 89, bin: 89, cache_ca: 0,
+        let a = FuncAttributes { shared: r.modules[k.module].static_smem_running(&k.name) as usize, const_: 0, local: 0, max_threads: kp.max_threads as c_int, num_regs: if kp.max_threads >= 1024 { 32 } else { 128 }, ptx: 89, bin: 89, cache_ca: 0,
             max_dyn: if k.max_dynamic_smem > 0 { k.max_dynamic_smem as c_int } else { (SMEM_DEFAULT_LIMIT - static_floor.min(SMEM_DEFAULT_LIMIT)) as c_int }, carveout: k.preferred_carveout, cluster_must: 0, req_w: 0, req_h: 0, req_d: 0, cluster_policy: 0, non_portable: 0, reserved: [0; 16] };
         unsafe { *attr = a };
         SUCCESS

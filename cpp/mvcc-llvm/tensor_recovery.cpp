@@ -537,6 +537,7 @@ class KernelRecovery {
   void proveDeviceBlocks();
   bool buildGrids();
   void validateFixpoint();
+  bool sinkResultUses(FusedOp* op, bool apply);
   void typeAccumulators();
   void rewrite();
 };
@@ -1398,15 +1399,52 @@ void KernelRecovery::validateFixpoint() {
       }
       if (!ld->firstUse) for (FusedOp* o : us) drop.insert(o);
     }
+    std::set<FusedOp*> unsinkable;
+    for (auto& op : ops) if (!drop.count(op.get()) && !sinkResultUses(op.get(), false)) unsinkable.insert(op.get());
+    drop.insert(unsinkable.begin(), unsinkable.end());
     if (drop.empty()) break;
     changed = true;
     std::vector<std::unique_ptr<FusedOp>> keep;
     for (auto& op : ops) {
       if (!drop.count(op.get())) { keep.push_back(std::move(op)); continue; }
-      for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) m->fail("register-built block is shared by mma batches none of which dominates the others");
+      const char* why = unsinkable.count(op.get()) ? "a tile result is read before the batch's last mma by something other than pure arithmetic"
+                                                   : "register-built block is shared by mma batches none of which dominates the others";
+      for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) m->fail(why);
     }
     ops.swap(keep);
   }
+  for (auto& op : ops) sinkResultUses(op.get(), true);
+}
+
+// The fused op runs at its last mma. Arithmetic that reads a tile result earlier in that block (a kernel combining
+// each tile's products as soon as they exist) moves to just after it, in order; it must be pure, and nothing it
+// feeds may be an mma of the op.
+bool KernelRecovery::sinkResultUses(FusedOp* op, bool apply) {
+  Instruction* ip = op->lastMma->CI;
+  BasicBlock* BB = ip->getParent();
+  std::set<Instruction*> calls, moved;
+  std::vector<Instruction*> work;
+  for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) calls.insert(m->CI);
+  for (auto& a : op->m) for (auto& b : a) if (MmaRec* m = b.back()) for (auto* d : m->d) if (d) for (User* U : d->users()) work.push_back(cast<Instruction>(U));
+  while (!work.empty()) {
+    Instruction* I = work.back(); work.pop_back();
+    if (I->getParent() != BB || !I->comesBefore(ip) || moved.count(I)) continue;
+    if (calls.count(I) || isa<PHINode>(I)) return false;
+    if (auto* CI = dyn_cast<CallInst>(I)) {
+      Function* Fn = CI->getCalledFunction();
+      const StringRef n = Fn ? Fn->getName() : "";
+      if (!Fn || CI->isConvergent() || !(CI->doesNotAccessMemory() || n.starts_with("__nv_f") || n.starts_with("llvm.fma") || n.starts_with("llvm.fmuladd"))) return false;
+    } else if (I->mayReadOrWriteMemory() || I->isTerminator()) return false;
+    moved.insert(I);
+    for (User* U : I->users()) work.push_back(cast<Instruction>(U));
+  }
+  if (!apply || moved.empty()) return true;
+  std::vector<Instruction*> order(moved.begin(), moved.end());
+  std::sort(order.begin(), order.end(), [](Instruction* x, Instruction* y) { return x->comesBefore(y); });
+  Instruction* pos = ip;
+  for (Instruction* I : order) { I->moveAfter(pos); pos = I; }
+  note(std::to_string(order.size()) + " instruction(s) reading tile results moved after the fused op");
+  return true;
 }
 
 // ---------------------------------------------------------------- accumulator typing
