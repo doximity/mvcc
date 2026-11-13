@@ -232,6 +232,15 @@ fn fnv1a(data: &[u8]) -> u64 {
     h
 }
 
+/// `MVCC_PORTABLE_NUMERICS=1`: f16/bf16 mma.sync with f32 accumulate returns an NVIDIA tensor core's bits (the
+/// prelude's nv_mma) and recovered kernels give way to their exact twins, since matmul2d rounds as Apple's matrix
+/// units do.
+fn portable_numerics() -> bool {
+    static P: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *P.get_or_init(|| std::env::var("MVCC_PORTABLE_NUMERICS").map(|v| v == "1").unwrap_or(false))
+}
+const PORTABLE_DEFS: &[&str] = &["MVCC_PORTABLE_NUMERICS=1"];
+
 fn cache_dir() -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let d = std::path::PathBuf::from(home).join("Library/Caches/mvcc");
@@ -272,7 +281,7 @@ impl Module {
         let verbose = std::env::var("MVCC_VERBOSE").is_ok();
         // Offline-compiled path (README.md): $MVCC_METALLIB_DIR/<hash>.metallib, produced by
         // tools/precompile_metallib.sh from the `nvcc -keep` .metal. Any failure falls back to the source path.
-        if let Ok(dir) = std::env::var("MVCC_METALLIB_DIR") {
+        if let Some(dir) = std::env::var("MVCC_METALLIB_DIR").ok().filter(|_| !portable_numerics()) {
             let path = std::path::Path::new(&dir).join(format!("{}.metallib", self.hash));
             match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| dev.library_from_data(&bytes)) {
                 Ok(lib) => {
@@ -285,7 +294,7 @@ impl Module {
                 Err(e) => if verbose { eprintln!("[MVCC] {}: {} (falling back to MSL source)", path.display(), e); },
             }
         }
-        let lib = dev.library_from_source(&self.msl, true, false)?;
+        let lib = dev.library_from_source_defs(&self.msl, true, false, if portable_numerics() { PORTABLE_DEFS } else { &[] })?;
         if verbose { eprintln!("[MVCC] compiled module {} ({} kernels) in {:.1} ms", self.hash, self.abi.kernels.len(), t0.elapsed().as_secs_f64() * 1e3); }
         self.open_archive(dev);
         let l = Arc::new(lib);
@@ -296,7 +305,7 @@ impl Module {
     /// Open (or create) the binary archive holding this module's compiled pipelines.
     fn open_archive(&mut self, dev: &Device) {
         if let Some(dir) = cache_dir() {
-            let path = dir.join(format!("{}.metalar", self.hash));
+            let path = dir.join(format!("{}{}.metalar", self.hash, if portable_numerics() { ".portable" } else { "" }));
             let ps = path.to_string_lossy().into_owned();
             let existing = path.exists();
             match dev.open_archive(if existing { Some(&ps) } else { None }) {
@@ -312,7 +321,7 @@ impl Module {
     fn ensure_spill_library(&mut self, dev: &Device) -> Result<Arc<Library>, String> {
         if let Some(l) = &self.spill_library { return Ok(l.clone()); }
         let t0 = std::time::Instant::now();
-        let lib = dev.library_from_source_defs(&self.msl, true, false, &["__MVCC_SPILL=1"]).map_err(|e| format!("spill build: {}", e))?;
+        let lib = dev.library_from_source_defs(&self.msl, true, false, if portable_numerics() { &["__MVCC_SPILL=1", "MVCC_PORTABLE_NUMERICS=1"] } else { &["__MVCC_SPILL=1"] }).map_err(|e| format!("spill build: {}", e))?;
         if std::env::var("MVCC_VERBOSE").is_ok() { eprintln!("[MVCC] compiled spill build of module {} ({} kernels) in {:.1} ms", self.hash, self.abi.kernels.len(), t0.elapsed().as_secs_f64() * 1e3); }
         let l = Arc::new(lib);
         self.spill_library = Some(l.clone());
@@ -359,7 +368,7 @@ impl Module {
     fn tensor_policy(&mut self, dev: &Device, lib: &Arc<Library>) -> TensorPolicy {
         if let Some(p) = self.tensor_policy { return p; }
         let verbose = std::env::var("MVCC_VERBOSE").is_ok() || std::env::var("MVCC_TENSOR_DIAG").is_ok();
-        let forced_exact = std::env::var("MVCC_TENSOR_EXACT").map(|v| v == "1").unwrap_or(false);
+        let forced_exact = portable_numerics() || std::env::var("MVCC_TENSOR_EXACT").map(|v| v == "1").unwrap_or(false);
         let policy = if forced_exact {
             if verbose { eprintln!("[MVCC] tensor recovery: exact twins selected by environment"); }
             TensorPolicy::Exact

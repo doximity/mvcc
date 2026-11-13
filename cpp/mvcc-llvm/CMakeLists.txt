@@ -19,7 +19,7 @@ separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 
 llvm_map_components_to_libnames(LLVM_LIBS core support irreader bitreader bitwriter analysis passes transformutils scalaropts ipo instcombine vectorize)
 
-add_executable(mvcc-ir2msl ir2msl.cpp msl_emitter.cpp msl_guarded.cpp ptx_asm.cpp tensor_recovery.cpp staging_elim.cpp symexec.cpp wide_vectors.cpp sig.cpp coords.cpp stir.cpp schedule.cpp legality.cpp engine.cpp emit.cpp dot_recovery.cpp)
+add_executable(mvcc-ir2msl ir2msl.cpp msl_emitter.cpp msl_guarded.cpp ptx_asm.cpp tensor_recovery.cpp staging_elim.cpp symexec.cpp wide_vectors.cpp sig.cpp coords.cpp stir.cpp schedule.cpp legality.cpp engine.cpp emit.cpp dot_recovery.cpp fma_fusion.cpp)
 if(DEFINED LLVM_TOOLS_BINARY_DIR AND EXISTS "${LLVM_TOOLS_BINARY_DIR}/llc")
   target_compile_definitions(mvcc-ir2msl PRIVATE MVCC_LLC="${LLVM_TOOLS_BINARY_DIR}/llc")
 endif()

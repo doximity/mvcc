@@ -463,8 +463,52 @@ inline uint __mvcc_ldmatrix_trans(ulong a, uint i, uint lane) {
 }
 #endif
 
+#if MVCC_NEED_mma && MVCC_PORTABLE_NUMERICS
+namespace mvcc_detail {
+// acc + a[0..7] . b[0..7] as an NVIDIA tensor core computes each k8 step of an f16/bf16 mma.sync with f32 accumulate
+// (bit-exact against the A10G, tests/kernels/mma_nvidia.cu): the accumulator and the eight exact products, a product
+// at exponent ea + eb, align to the largest exponent keeping 24 fraction bits truncated toward zero, sum exactly, and
+// round toward zero to fp32. a and b are raw f16 (BF = false) or bf16 bits.
+template <bool BF> inline float nv_fma8(float acc, thread const ushort* a, thread const ushort* b) {
+  constexpr uint MB = BF ? 7u : 10u, EM = BF ? 255u : 31u;
+  constexpr int BIAS = BF ? 127 : 15;
+  const uint uc = as_type<uint>(acc);
+  const int ec = max(int((uc >> 23) & 255u), 1) - 127;
+  int emax = (uc << 1) ? ec : -100000;
+  int pe[8]; uint pm[8];
+  for (int k = 0; k < 8; ++k) {
+    const uint x = a[k], y = b[k], xe = (x >> MB) & EM, ye = (y >> MB) & EM;
+    pm[k] = ((x & ((1u << MB) - 1u)) | (xe ? 1u << MB : 0u)) * ((y & ((1u << MB) - 1u)) | (ye ? 1u << MB : 0u));
+    pe[k] = max(int(xe), 1) + max(int(ye), 1) - 2 * BIAS;
+    if (pm[k]) emax = max(emax, pe[k]);
+  }
+  int s = 0;
+  if (uc << 1) {
+    const int sh = emax - ec;
+    const int v = sh < 32 ? int((((uc & 0x7fffffu) | (((uc >> 23) & 255u) ? 0x800000u : 0u)) << 1) >> sh) : 0;
+    s += (uc >> 31) ? -v : v;
+  }
+  for (int k = 0; k < 8; ++k) {
+    if (!pm[k]) continue;
+    const int sh = emax - pe[k] + 2 * int(MB) - 24;
+    const int v = int(sh <= 0 ? pm[k] << uint(-sh) : sh < 32 ? pm[k] >> uint(sh) : 0u);
+    s += ((a[k] ^ b[k]) >> 15) ? -v : v;
+  }
+  if (s == 0) return 0.f;
+  const uint sign = s < 0 ? 0x80000000u : 0u;
+  uint n = uint(abs(s));
+  const int bits = 32 - int(clz(n)), e = emax + 102 + bits;
+  n = bits > 24 ? n >> uint(bits - 24) : n << uint(24 - bits);
+  if (e <= 0) return as_type<float>(sign);
+  if (e >= 255) return as_type<float>(sign | 0x7f800000u);
+  return as_type<float>(sign | (uint(e) << 23) | (n & 0x7fffffu));
+}
+}  // namespace mvcc_detail
+#endif
+
 // ---------------------------------------------------------------------------------------------------------------
-// mma.sync on simdgroup_matrix 8x8 tiles.
+// mma.sync on simdgroup_matrix 8x8 tiles; with MVCC_PORTABLE_NUMERICS, f16/bf16 inputs with f32 accumulate round as
+// NVIDIA tensor cores do instead (nv_mma).
 //
 // PTX fragment layout (g = lane>>2, t = lane&3): each 32-bit register of a 16-bit-typed 8x8 block holds the pair
 // (row g, cols 2t..2t+1) — for A row-major blocks, and for B ("col") the pair (k=2t..2t+1, n=g) i.e. the same shape
@@ -592,8 +636,52 @@ inline uint4 add_c_s32(float2 t, float2 b, uint4 c) {
   return uint4((uint)((int)rint(t.x) + (int)c.x), (uint)((int)rint(t.y) + (int)c.y),
                (uint)((int)rint(b.x) + (int)c.z), (uint)((int)rint(b.y) + (int)c.w));
 }
+#if MVCC_PORTABLE_NUMERICS
+inline void unpack2(thread ushort* p, uint w) { p[0] = ushort(w); p[1] = ushort(w >> 16); }
+// m16n8k16 / m16n8k8 with f32 accumulate on nv_fma8: lane 4g+t gathers rows g and g+8 of A and columns 2t, 2t+1 of
+// B from the quads that hold them.
+template <bool BF, int K> inline uint4 nv_mma(uint4 a, uint2 b, uint4 c, uint lane) {
+  const uint g = lane >> 2, t = lane & 3u;
+  ushort r0[16], r1[16], c0[16], c1[16];
+  for (uint q = 0; q < 4; ++q) {
+    const ushort sa = ushort(4u * g + q), sb0 = ushort(8u * t + q), sb1 = ushort(8u * t + 4u + q);
+    unpack2(r0 + 2 * q, simd_shuffle(a.x, sa));
+    unpack2(r1 + 2 * q, simd_shuffle(a.y, sa));
+    unpack2(c0 + 2 * q, simd_shuffle(b.x, sb0));
+    unpack2(c1 + 2 * q, simd_shuffle(b.x, sb1));
+    if (K == 16) {
+      unpack2(r0 + 8 + 2 * q, simd_shuffle(a.z, sa));
+      unpack2(r1 + 8 + 2 * q, simd_shuffle(a.w, sa));
+      unpack2(c0 + 8 + 2 * q, simd_shuffle(b.y, sb0));
+      unpack2(c1 + 8 + 2 * q, simd_shuffle(b.y, sb1));
+    }
+  }
+  float d[4] = {as_type<float>(c.x), as_type<float>(c.y), as_type<float>(c.z), as_type<float>(c.w)};
+  for (int k = 0; k < K; k += 8) {
+    d[0] = nv_fma8<BF>(d[0], r0 + k, c0 + k);
+    d[1] = nv_fma8<BF>(d[1], r0 + k, c1 + k);
+    d[2] = nv_fma8<BF>(d[2], r1 + k, c0 + k);
+    d[3] = nv_fma8<BF>(d[3], r1 + k, c1 + k);
+  }
+  return uint4(as_type<uint>(d[0]), as_type<uint>(d[1]), as_type<uint>(d[2]), as_type<uint>(d[3]));
+}
+#endif
 }  // namespace mvcc_detail
 
+#if MVCC_PORTABLE_NUMERICS
+inline void __mvcc_mma_m16n8k16_f32_f16_f16_f32(thread uint4& d, uint4 a, uint2 b, uint4 c, uint lane) {
+  d = mvcc_detail::nv_mma<false, 16>(a, b, c, lane);
+}
+inline void __mvcc_mma_m16n8k16_f32_bf16_bf16_f32(thread uint4& d, uint4 a, uint2 b, uint4 c, uint lane) {
+  d = mvcc_detail::nv_mma<true, 16>(a, b, c, lane);
+}
+inline void __mvcc_mma_m16n8k8_f32_f16_f16_f32(thread uint4& d, uint2 a, uint b, uint4 c, uint lane) {
+  d = mvcc_detail::nv_mma<false, 8>(uint4(a, 0u, 0u), uint2(b, 0u), c, lane);
+}
+inline void __mvcc_mma_m16n8k8_f32_bf16_bf16_f32(thread uint4& d, uint2 a, uint b, uint4 c, uint lane) {
+  d = mvcc_detail::nv_mma<true, 8>(uint4(a, 0u, 0u), uint2(b, 0u), c, lane);
+}
+#else
 inline void __mvcc_mma_m16n8k16_f32_f16_f16_f32(thread uint4& d, uint4 a, uint2 b, uint4 c, uint lane) {
   float2 t, bo; mvcc_detail::mma_16x8x16<half>(t, bo, a, b, lane); d = mvcc_detail::add_c_f32(t, bo, c);
 }
@@ -606,6 +694,7 @@ inline void __mvcc_mma_m16n8k8_f32_f16_f16_f32(thread uint4& d, uint2 a, uint b,
 inline void __mvcc_mma_m16n8k8_f32_bf16_bf16_f32(thread uint4& d, uint2 a, uint b, uint4 c, uint lane) {
   float2 t, bo; mvcc_detail::mma_16x8x8<bfloat>(t, bo, a, b, lane); d = mvcc_detail::add_c_f32(t, bo, c);
 }
+#endif
 // half accumulate: PTX c/d are 2 regs of half2: c0 = (row g, cols 2t..2t+1) top, c1 = bottom
 inline void __mvcc_mma_m16n8k16_f16_f16_f16_f16(thread uint2& d, uint4 a, uint2 b, uint2 c, uint lane) {
   float2 t, bo; mvcc_detail::mma_16x8x16<half>(t, bo, a, b, lane);

@@ -85,6 +85,8 @@ Tensor-core code (`mma.sync`, `ldmatrix`, `cp.async`) has an exact translation b
 
 mvcc works from the whole loop instead. It recovers the matrix product the loop computes, proves that a Metal 4 `matmul2d` on cooperative tensors computes the same result, and emits that. Every recovered kernel is also compiled as an exact translation of the original code. The runtime uses the exact version when the GPU does not support Metal 4, when on-device layout verification fails, or when a launch shape is outside what the proof covers. `MVCC_TENSOR_DIAG=1` reports what recovery did for each kernel, and `MVCC_TENSOR_EXACT=1` runs the exact versions.
 
+`matmul2d` and the default `mma.sync` translation round as Apple's matrix units do, so results can differ from an NVIDIA GPU in the last place. With `MVCC_PORTABLE_NUMERICS=1` in the environment, `mma.sync` with f16/bf16 inputs and f32 accumulate returns an NVIDIA tensor core's bits instead: each k8 step aligns the accumulator and the eight exact products to the largest exponent, truncates to 24 fraction bits, and rounds the sum toward zero (measured on an A10G, `tests/kernels/mma_nvidia.cu`). Recovered kernels then run their exact twins, on the ALUs, which is slower.
+
 For new code, `mvcc::warp_tile` in `include/mvcc/tile.cuh` is a portable warp-level matrix-multiply API. It compiles to `mma.sync` with NVIDIA's `nvcc` and to `matmul2d` with mvcc.
 
 ## Differences from CUDA
@@ -175,6 +177,7 @@ MVCC_METALLIB_DIR=./metallibs ./app
 | `MVCC_VERIFY=0`           | Skip the build-time Metal compile check of generated MSL                                    |
 | `MVCC_TENSOR_DIAG=1`      | Report, for each kernel, what tensor-core recovery did or why it declined                   |
 | `MVCC_TENSOR_EXACT=1`     | Launch the exact translations instead of recovered kernels                                  |
+| `MVCC_PORTABLE_NUMERICS=1` | f16/bf16 `mma.sync` (f32 accumulate) returns NVIDIA tensor-core bits; implies `MVCC_TENSOR_EXACT=1` |
 | `MVCC_METALLIB_DIR=<dir>` | Load precompiled `<hash>.metallib` files from `<dir>`                                       |
 | `MVCC_DEVICES=<n>`        | Present `n` logical devices (1-16)                                                          |
 | `MVCC_GRAPH=<file>`       | Kernel graph for compile-time fusion (by default, inferred from kernel order in the module) |

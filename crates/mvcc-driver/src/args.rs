@@ -35,6 +35,7 @@ pub struct Opts {
     pub force_lang: Option<String>,
     pub relaxed_constexpr: bool,
     pub fast_math: bool,
+    pub no_fmad: bool,               // -fmad=false: no mul+add contraction
     pub shared: bool,
     pub cudart: String,
     pub verbose: bool,
@@ -216,6 +217,7 @@ pub fn parse(args: &[String]) -> Result<Opts, String> {
                 "-Xlinker" | "--linker-options" => for x in split_commas(&v) { o.linker_extra.push("-Xlinker".into()); o.linker_extra.push(x); },
                 "-Xmvcc" => o.ir2msl_extra.extend(split_commas(&v)),
                 "-cudart" | "--cudart" => o.cudart = v,
+                "-fmad" | "--fmad" => o.no_fmad = v == "false",
                 "-isystem" => o.isystem.push(PathBuf::from(v)),
                 "-include" => o.force_includes.push(PathBuf::from(v)),
                 "-m" | "--machine" => { if v != "64" { return Err("only 64-bit targets are supported".into()); } }

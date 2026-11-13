@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+
+- `a * b + c` that clang marks `contract` fuses into one fma, which is what nvcc does with `-fmad=true`. The emitter used to write the multiply and the add separately, and Metal's safe math does not fuse them, so those expressions rounded twice and about 10% of random inputs differed in the last place from an A10G. `-fmad=false` compiles the device pass with `-ffp-contract=off`. float and half only: double is emulated and bfloat has no Metal fma.
+- `MVCC_PORTABLE_NUMERICS=1` (runtime): f16 and bf16 `mma.sync` with an f32 accumulator rounds each k8 step as an NVIDIA tensor core does: the eight products and the accumulator align to 24 fraction bits, sum, and round toward zero. Recovered kernels run their exact twins, since `matmul2d` rounds as Apple's matrix units do. Off by default. `tests/kernels/mma_nvidia.cu` checks `m16n8k16` against an A10G bit for bit.
+
 ## 1.1.2
 
 - A stream's command buffer also commits once its estimated GPU time reaches about a second, the estimate being the threads it launched times the GPU ns per thread measured on the stream's completed buffers. A long prefill on a throttled GPU packed 512 heavy launches into one buffer, and macOS aborted it (`kIOGPUCommandBufferCallbackErrorTimeout`), which surfaced as an illegal memory access. Decode-sized buffers are unchanged.

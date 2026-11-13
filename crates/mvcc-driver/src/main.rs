@@ -230,6 +230,8 @@ fn compile_one(o: &Opts, l: &Layout, input: &Path, output: &Path) -> Result<(), 
             c.args(cuda_common_flags(o, l));
             c.arg("--cuda-device-only").arg(format!("--cuda-gpu-arch={}", arch(o))).arg("--cuda-feature=+ptx86");
             c.arg(format!("-O{}", device_opt(o)));
+            // -fmad=false: clang leaves mul and add without `contract`, so FmaFusionPass (cpp/mvcc-llvm/fma_fusion.cpp) fuses nothing
+            if o.no_fmad { c.arg("-ffp-contract=off"); }
             // `#pragma unroll` unrolls under nvcc whatever the loop looks like; clang's unroller has three rules nvcc
             // has not, and reports -Wpass-failed "loop not unrolled" for each loop they stop:
             //  * a loop with a bounded but inexact trip count (`for (b = 0; b < kSpan; ++b) if (b >= n) break;`,
