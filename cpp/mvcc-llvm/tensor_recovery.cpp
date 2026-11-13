@@ -537,6 +537,7 @@ class KernelRecovery {
   void proveDeviceBlocks();
   bool buildGrids();
   void validateFixpoint();
+  bool sinkResultUses(FusedOp* op, bool apply);
   void typeAccumulators();
   void rewrite();
 };
@@ -1296,12 +1297,11 @@ bool KernelRecovery::buildGrids() {
         for (auto& op : local) if (devWhy.empty()) devWhy = devOpWhy(*op);
         if (!devWhy.empty()) local.clear();
       }
-      if (local.empty()) {
-        if (integer) {
-          failAll(std::string("s8/u8 mma operands are recovered as fragments read straight from device memory only (") +
-                  (devAll ? devWhy : "an A or B block is an ldmatrix or a computed fragment") + ")");
-          continue;
-        }
+      if (local.empty() && integer) {
+        if (aT == 1 || bT == 1) { failAll("8-bit operands loaded with ldmatrix .trans (bytes move in pairs)"); continue; }
+        if (devAll) note("device-memory fragments kept on the cooperative path: " + devWhy);
+        form(false, 1);
+      } else if (local.empty()) {
         if (devAll) note("device-memory fragments kept on the cooperative path: " + devWhy);
         // cooperative operands: K depth 32 per op whenever the chain allows it; measured on M5 Pro, 32x32x32 ops
         // beat two 32x32x16 ops for every warp tile (64x128/32x64: 13.6 -> 23.3 TFLOP/s; 128x64/64x32 and
@@ -1399,15 +1399,59 @@ void KernelRecovery::validateFixpoint() {
       }
       if (!ld->firstUse) for (FusedOp* o : us) drop.insert(o);
     }
+    std::set<FusedOp*> unsinkable;
+    for (auto& op : ops) if (!drop.count(op.get()) && !sinkResultUses(op.get(), false)) unsinkable.insert(op.get());
+    drop.insert(unsinkable.begin(), unsinkable.end());
     if (drop.empty()) break;
     changed = true;
     std::vector<std::unique_ptr<FusedOp>> keep;
     for (auto& op : ops) {
       if (!drop.count(op.get())) { keep.push_back(std::move(op)); continue; }
-      for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) m->fail("register-built block is shared by mma batches none of which dominates the others");
+      const char* why = unsinkable.count(op.get()) ? "a tile result is read before the batch's last mma by something other than pure arithmetic"
+                                                   : "register-built block is shared by mma batches none of which dominates the others";
+      for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) m->fail(why);
     }
     ops.swap(keep);
   }
+}
+
+// The fused op runs at its last mma. Arithmetic that reads a tile result earlier in that block (a kernel combining
+// each tile's products as soon as they exist) moves to just after it, in order; it must be pure, and nothing it
+// feeds may be an mma of the op.
+bool KernelRecovery::sinkResultUses(FusedOp* op, bool apply) {
+  Instruction* ip = op->lastMma->CI;
+  BasicBlock* BB = ip->getParent();
+  std::set<Instruction*> calls, moved;
+  auto opOfMma = [&](Instruction* I) -> FusedOp* {
+    for (auto& o : ops) if (o.get() != op) for (auto& a : o->m) for (auto& b : a) for (MmaRec* m : b) if (m && m->CI == I) return o.get();
+    return nullptr;
+  };
+  std::vector<Instruction*> work;
+  for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) calls.insert(m->CI);
+  for (auto& a : op->m) for (auto& b : a) if (MmaRec* m = b.back()) for (auto* d : m->d) if (d) for (User* U : d->users()) work.push_back(cast<Instruction>(U));
+  while (!work.empty()) {
+    Instruction* I = work.back(); work.pop_back();
+    if (isa<PHINode>(I) || I->getParent() != BB || !I->comesBefore(ip) || moved.count(I)) continue;  // a phi reads over its edge
+    if (calls.count(I)) return false;
+    if (FusedOp* o = opOfMma(I)) {  // a later batch's chain head: it takes the result as C where it is inserted
+      if (o->lastMma->CI->getParent() == BB && ip->comesBefore(o->lastMma->CI)) continue;
+      return false;
+    }
+    if (auto* CI = dyn_cast<CallInst>(I)) {
+      Function* Fn = CI->getCalledFunction();
+      const StringRef n = Fn ? Fn->getName() : "";
+      if (!Fn || CI->isConvergent() || !(CI->doesNotAccessMemory() || n.starts_with("__nv_f") || n.starts_with("llvm.fma") || n.starts_with("llvm.fmuladd"))) return false;
+    } else if (I->mayReadOrWriteMemory() || I->isTerminator()) return false;
+    moved.insert(I);
+    for (User* U : I->users()) work.push_back(cast<Instruction>(U));
+  }
+  if (!apply || moved.empty()) return true;
+  std::vector<Instruction*> order(moved.begin(), moved.end());
+  std::sort(order.begin(), order.end(), [](Instruction* x, Instruction* y) { return x->comesBefore(y); });
+  Instruction* pos = ip;
+  for (Instruction* I : order) { I->moveAfter(pos); pos = I; }
+  note(std::to_string(order.size()) + " instruction(s) reading tile results moved after the fused op");
+  return true;
 }
 
 // ---------------------------------------------------------------- accumulator typing
@@ -1548,20 +1592,34 @@ void KernelRecovery::rewrite() {
   std::vector<LdRec*> usedLds;
   { std::set<LdRec*> seen; auto add = [&](LdRec* l) { if (seen.insert(l).second) usedLds.push_back(l); };
     for (auto& op : ops) for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) { for (LdRec* l : m->aSrc) add(l); for (LdRec* l : m->bSrc) add(l); } }
+  std::set<LdRec*> eight;   // blocks of 8-bit ops: 16 x 32 bytes, four slots per word
+  for (auto& op : ops) if (op->type >= 2) for (auto& a : op->m) for (auto& b : a) for (MmaRec* m : b) if (m) { for (LdRec* l : m->aSrc) eight.insert(l); for (LdRec* l : m->bSrc) eight.insert(l); }
   FunctionCallee ldFn = declare(M, "__mvcc_tp_ld", ld4, {i32, i32, i32, i32});
   FunctionCallee f2s = declare(M, "__mvcc_tp_frag2slot", ld4, {i32, i32, i32, i32, i32});
+  FunctionCallee fill8 = declare(M, "__mvcc_tp_fill8", ld4, {i32, i32, i32});
+  FunctionCallee f2s8 = declare(M, "__mvcc_tp_f2s8", ld4, {i32, i32, i32, i32, i32});
   for (LdRec* ld : usedLds) {
     if (!ld->reg || ld->devUsed) continue;
+    const bool e8 = eight.count(ld);
     IRBuilder<> B(ld->firstUse->CI);
-    CallInst* nc = B.CreateCall(f2s, {cst(ld->kind), ld->regWords[0], ld->regWords[1], ld->regWords[2], ld->regWords[3]});
+    CallInst* nc = B.CreateCall(e8 ? f2s8 : f2s, {cst(ld->kind), ld->regWords[0], ld->regWords[1], ld->regWords[2], ld->regWords[3]});
     nc->setDebugLoc(ld->firstUse->CI->getDebugLoc());
     for (int i = 0; i < 4; i++) ld->slotWord[i] = B.CreateExtractValue(nc, i);
-    note(std::string("register-built ") + (ld->kind == 0 ? "A" : "B") + " block moved into slot order at its first mma (8 simd shuffles per 16x16 block)");
+    note(std::string("register-built ") + (ld->kind == 0 ? "A" : "B") + " block moved into slot order at its first mma (" + (e8 ? "4 simd shuffles per 16x32 8-bit block)" : "8 simd shuffles per 16x16 block)"));
   }
   for (LdRec* ld : usedLds) {
     if (ld->reg) continue;
     unsigned bm = 0;
     for (int r = 0; r < 4; r++) bm |= (unsigned)ld->matrixOfBlock[r] << (2 * r);
+    if (eight.count(ld)) {
+      if (ld->composite()) { warn("internal: fused ldmatrix.x2 pair feeding an 8-bit op"); continue; }
+      IRBuilder<> B(ld->CI);
+      CallInst* nc = B.CreateCall(fill8, {ld->CI->getArgOperand(0), cst(ld->kind), cst((int)bm)});
+      nc->setDebugLoc(ld->CI->getDebugLoc());
+      ld->CI->replaceAllUsesWith(nc);
+      ld->CI->eraseFromParent();
+      continue;
+    }
     if (ld->composite()) {
       // two x2 -> one x4 fill at the first instruction: lanes 0-15 give the first instruction's rows (matrices 0, 1),
       // lanes 16-31 the second's (matrices 2, 3). The second address is taken as is when lane l and l-16 provably
@@ -1628,12 +1686,13 @@ void KernelRecovery::rewrite() {
   }
 
   // 2. fused ops (C operands are placeholders = the old values; patched in step 3)
-  auto cArgBase = [&](FusedOp* op) { return op->dev ? 8 : 6 + (op->M * op->K + op->K * op->N) / 64; };
+  auto cArgBase = [&](FusedOp* op) { return op->dev ? 8 : 6 + (op->M * op->K + op->K * op->N) / (op->type >= 2 ? 128 : 64); };
   std::map<FusedOp*, CallInst*> ptx2accOf;
   for (auto& op : ops) {
     const int MTL = (int)op->m.size(), NTL = (int)op->m[0].size(), LV = (int)op->m[0][0].size();
     const int cap = op->cap();
-    const int nA = op->M * op->K / 64, nB = op->K * op->N / 64;  // 32-bit words per lane
+    const int epw = op->type >= 2 ? 128 : 64;
+    const int nA = op->M * op->K / epw, nB = op->K * op->N / epw;  // 32-bit words per lane
     IRBuilder<> B(op->lastMma->CI);
     std::vector<Value*> cVals = op->cList;
     for (Value*& v : cVals) if (!v) v = Constant::getNullValue(op->accTy);   // padding positions of a solo B block
@@ -1700,10 +1759,14 @@ void KernelRecovery::rewrite() {
     for (int nb = 0; nb < NTL / 2; nb++) for (int kb = 0; kb < LV; kb++) subB[op->N == 32 ? nb + (NTL / 2) * kb : kb] = wordsOf(op->m[0][2 * nb][kb], false);
     std::vector<Value*> aWords, bWords;
     for (auto& s : subA) aWords.insert(aWords.end(), s.begin(), s.end());
-    for (auto& s : subB) bWords.insert(bWords.end(), s.begin(), s.end());
+    if (op->type >= 2 && op->N == 32) {
+      // 8-bit B (32 k x 32 n): slot quad bits are n+8, n+16, k+16 - the two n blocks interleave by quad
+      bWords.assign(8, nullptr);
+      for (int nb = 0; nb < 2; nb++) for (int j = 0; j < 4; j++) bWords[(j & 1) + 2 * nb + 4 * (j >> 1)] = subB[nb][j];
+    } else for (auto& s : subB) bWords.insert(bWords.end(), s.begin(), s.end());
     if ((int)aWords.size() != nA || (int)bWords.size() != nB) { warn("internal: operand word count mismatch"); continue; }
     std::vector<Type*> at(6, i32); for (int i = 0; i < nA + nB; i++) at.push_back(i32); for (int i = 0; i < cap; i++) at.push_back(op->accTy);
-    std::string nm = "__mvcc_tp_mma_" + std::to_string(op->M) + "x" + std::to_string(op->N) + "x" + std::to_string(op->K);
+    std::string nm = std::string(op->type >= 2 ? "__mvcc_tp_mma8_" : "__mvcc_tp_mma_") + std::to_string(op->M) + "x" + std::to_string(op->N) + "x" + std::to_string(op->K);
     FunctionCallee mf = declare(M, nm, accStruct(cap, op->accTy), at);
     std::vector<Value*> args = {cst(op->M), cst(op->N), cst(op->K), cst(op->type), cst(op->tl), cst(op->tr)};
     args.insert(args.end(), aWords.begin(), aWords.end()); args.insert(args.end(), bWords.begin(), bWords.end()); args.insert(args.end(), cVals.begin(), cVals.end());
@@ -1887,7 +1950,12 @@ void KernelRecovery::splitFp8Mmas() {
 bool KernelRecovery::run() {
   kname = demangle(F.getName().str());
   splitFp8Mmas();
-  if (!collect()) return false;
+  // exact twin before the analyses touch anything
+  ValueToValueMapTy VMap;
+  Function* twin = CloneFunction(&F, VMap);
+  twin->setName(F.getName() + "__mvcc_exact");
+  auto bail = [&] { twin->eraseFromParent(); return false; };
+  if (!collect()) return bail();
   res.kernelsWithMma++;
   analyzeChains();
   analyzeOperands();
@@ -1900,7 +1968,7 @@ bool KernelRecovery::run() {
     for (auto& m : mmas) if (!m->ok) reasons.insert(m->why);
     std::string r; for (auto& s : reasons) { if (!r.empty()) r += "; "; r += s; }
     warn("mma.sync recognized but not recovered (exact lowering kept): " + r);
-    return false;
+    return bail();
   }
   typeAccumulators();
   // check(P,S) before any IR: rewrite() is emit(P,S) for this contraction.
@@ -1911,15 +1979,12 @@ bool KernelRecovery::run() {
     legal::Result Lg = legal::check(GP, Sg);
     if (!Lg.ok) {
       warn("check+emit refused " + Lg.first() + " (exact twin)");
-      return false;
+      return bail();
     }
     note("check+emit: tensor-op " + Lg.first() + " " + sched::stageShape(Sg));
   }
-  // exact twin before touching anything
-  ValueToValueMapTy VMap;
-  Function* twin = CloneFunction(&F, VMap);
-  twin->setName(F.getName() + "__mvcc_exact");
   res.exactVariants.push_back({F.getName().str(), twin->getName().str()});
+  for (auto& op : ops) sinkResultUses(op.get(), true);
   rewrite();
   unsigned nm = 0; for (auto& m : mmas) if (m->ok) nm++;
   unsigned left = 0; for (auto& m : mmas) if (!m->ok) left++;

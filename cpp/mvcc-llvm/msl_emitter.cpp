@@ -2278,6 +2278,13 @@ void Emitter::emitInst(Instruction& I) {
       case Instruction::URem: set(a + " % " + b); return;
       case Instruction::SDiv: set("(" + ty(T) + ")((" + sty(T) + ")" + a + " / (" + sty(T) + ")" + b + ")"); return;
       case Instruction::SRem: set("(" + ty(T) + ")((" + sty(T) + ")" + a + " % (" + sty(T) + ")" + b + ")"); return;
+      // an oversized LLVM shift is poison (often speculated, then not selected); in MSL it is UB the compiler exploits
+      case Instruction::Shl: case Instruction::LShr: case Instruction::AShr:
+        if (!isa<ConstantInt>(BO->getOperand(1)) && !isBool) b = "(" + b + " & " + std::to_string(T->getScalarSizeInBits() - 1) + ")";
+        break;
+      default: break;
+    }
+    switch (BO->getOpcode()) {
       case Instruction::Shl: set("(" + ty(T) + ")(" + a + " << " + b + ")"); return;
       case Instruction::LShr: set(a + " >> " + b); return;
       case Instruction::AShr: set("(" + ty(T) + ")((" + sty(T) + ")" + a + " >> " + b + ")"); return;
@@ -2763,6 +2770,35 @@ void Emitter::emitTpOp(CallInst& CI, StringRef name) {
     line("}");
     return;
   }
+  if (name == "__mvcc_tp_fill8") {
+    line("{ uint __w[4]; __mvcc_tp_fill8(__w, " + sharedAddr(CI.getArgOperand(0)) + ", __lane, " + std::to_string(cst(1)) + ", " + std::to_string(cst(2)) + "u);");
+    for (unsigned i = 0; i < 4; i++) line("  " + nm + ".f" + std::to_string(i) + " = __w[" + std::to_string(i) + "];");
+    line("}");
+    return;
+  }
+  if (name == "__mvcc_tp_f2s8") {
+    line("{ uint __w[4]; __mvcc_tp_f2s8(__w, " + val(CI.getArgOperand(1)) + ", " + val(CI.getArgOperand(2)) + ", " + val(CI.getArgOperand(3)) + ", " + val(CI.getArgOperand(4)) + ", __lane, " + std::to_string(cst(0)) + ");");
+    for (unsigned i = 0; i < 4; i++) line("  " + nm + ".f" + std::to_string(i) + " = __w[" + std::to_string(i) + "];");
+    line("}");
+    return;
+  }
+  if (name.starts_with("__mvcc_tp_mma8_")) {
+    const int M = cst(0), N = cst(1), K = cst(2), type = cst(3);
+    const unsigned nA = M * K / 128, nB = K * N / 128, cap = M * N / 32;
+    if (CI.arg_size() != 6 + nA + nB + cap || nOut != cap) fail("__mvcc_tp_mma8: bad arity");
+    std::string blk = "{ uint __a[" + std::to_string(nA) + "] = {";
+    for (unsigned i = 0; i < nA; i++) blk += (i ? ", " : "") + val(CI.getArgOperand(6 + i));
+    blk += "}; uint __b[" + std::to_string(nB) + "] = {";
+    for (unsigned i = 0; i < nB; i++) blk += (i ? ", " : "") + val(CI.getArgOperand(6 + nA + i));
+    blk += "}; int __c[" + std::to_string(cap) + "] = {";
+    for (unsigned i = 0; i < cap; i++) blk += (i ? ", " : "") + std::string("(int)(") + val(CI.getArgOperand(6 + nA + nB + i)) + ")";
+    blk += "}; int __d[" + std::to_string(cap) + "];";
+    line(blk);
+    line("  __mvcc_tp_mma8<" + std::string(type == 2 ? "int8_t" : "uint8_t") + ", " + std::to_string(M) + ", " + std::to_string(N) + ", " + std::to_string(K) + ">(__d, __a, __b, __c);");
+    for (unsigned i = 0; i < cap; i++) line("  " + nm + ".f" + std::to_string(i) + " = __d[" + std::to_string(i) + "];");
+    line("}");
+    return;
+  }
   if (name == "__mvcc_tp_widen_e4m3" || name == "__mvcc_tp_widen_e5m2") {
     // fp8 mma split: 4 bytes of one PTX register -> two half pairs (lo k pair, hi k pair)
     usedHelpers.insert("mma");
@@ -2920,6 +2956,50 @@ void Emitter::emitVerifyKernels() {
       k += "  for (int i = 0; i < " + cs + "; i++) out[__lane * " + cs + " + i] = ptx[i];\n";
       k += "  __mvcc_tp_ptx2acc<" + std::to_string(d.M) + ", " + std::to_string(d.N) + ">(back, ptx, __lane, scratch);\n";
       k += "  " + E + " err = 0; for (int i = 0; i < " + cs + "; i++) err += (back[i] != dst[i] ? 1 : 0) + (dst2[i] != dst[i] ? 1 : 0);\n";
+      k += "  out[32 * " + cs + " + __lane] = err;\n";
+      k += "}\n\n";
+      kernelsOut += k;
+      continue;
+    }
+    if (d.integer()) {
+      // 8-bit cooperative operands, same buffers as the device check: A [M][K] and B [N][K] at pitch K+16. Two
+      // products - A by ldmatrix fill and B by register fragments, then the other way round - must agree; the first
+      // goes out in fragment layout, then the slot<->fragment round trip and the disagreements.
+      const std::string cs = std::to_string(cap), ld = std::to_string(d.K + 16), na = std::to_string(d.M * d.K / 128), nb = std::to_string(d.K * d.N / 128);
+      const std::string An = std::to_string(d.M * (d.K + 16)), Bn = std::to_string(d.N * (d.K + 16));
+      k += "kernel void " + v.name + "(device const " + T + "* A [[buffer(0)]], device const " + T + "* B [[buffer(1)]], device int* out [[buffer(2)]],\n";
+      k += "    uint __lane [[thread_index_in_simdgroup]]) {\n";
+      k += "  threadgroup " + T + " As[" + An + "] __attribute__((aligned(16))); threadgroup " + T + " Bs[" + Bn + "] __attribute__((aligned(16)));\n";
+      k += "  for (uint i = __lane; i < " + An + "u; i += 32u) As[i] = A[i];\n";
+      k += "  for (uint i = __lane; i < " + Bn + "u; i += 32u) Bs[i] = B[i];\n";
+      k += "  simdgroup_barrier(mem_flags::mem_threadgroup);\n";
+      k += "  const uint g = __lane >> 2, t = __lane & 3u, i8 = __lane >> 3, j8 = __lane & 7u;\n";
+      k += "  uint a0[" + na + "], a1[" + na + "], b0[" + nb + "], b1[" + nb + "]; int c[" + cs + "], dst[" + cs + "], dst2[" + cs + "], ptx[" + cs + "], back[" + cs + "];\n";
+      k += "  for (int i = 0; i < " + cs + "; i++) c[i] = 0;\n";
+      k += "  auto w = [&](threadgroup " + T + "* p, uint row, uint col) { return *(threadgroup uint*)(p + row * " + ld + "u + col); };\n";
+      for (int s = 0; s < 2; s++) {
+        const int R = s ? d.N : d.M;
+        const std::string P = s ? "Bs" : "As";
+        for (int blk = 0; blk < R / 16; blk++) {
+          const std::string r0 = std::to_string(16 * blk);
+          // ldmatrix x4 row address: matrix i8 = (rows +8 for bit 0 (A) / bit 1 (B), k bytes +16 for the other bit)
+          const std::string row = s ? r0 + "u + 8u * (i8 >> 1) + j8" : r0 + "u + 8u * (i8 & 1u) + j8";
+          const std::string col = s ? "16u * (i8 & 1u)" : "16u * (i8 >> 1)";
+          const std::string f = s ? "w(Bs, " + r0 + "u + g, 4u * t), w(Bs, " + r0 + "u + g, 16u + 4u * t), w(Bs, " + r0 + "u + 8u + g, 4u * t), w(Bs, " + r0 + "u + 8u + g, 16u + 4u * t)"
+                                  : "w(As, " + r0 + "u + g, 4u * t), w(As, " + r0 + "u + 8u + g, 4u * t), w(As, " + r0 + "u + g, 16u + 4u * t), w(As, " + r0 + "u + 8u + g, 16u + 4u * t)";
+          k += "  { uint x[4], y[4]; __mvcc_tp_fill8(x, (ulong)(threadgroup uchar*)&" + P + "[(" + row + ") * " + ld + "u + " + col + "], __lane, " + std::to_string(s) + ", 0xE4u);\n";
+          k += "    __mvcc_tp_f2s8(y, " + f + ", __lane, " + std::to_string(s) + ");\n";
+          k += "    for (int j = 0; j < 4; j++) { const int q = " + (s && d.N == 32 ? std::string("(j & 1) + 2 * ") + std::to_string(blk) + " + 4 * (j >> 1)" : std::string("4 * ") + std::to_string(blk) + " + j") + "; " +
+               (s ? "b1[q] = x[j]; b0[q] = y[j]; }" : "a0[q] = x[j]; a1[q] = y[j]; }") + " }\n";
+        }
+      }
+      k += "  __mvcc_tp_mma8<" + T + ", " + std::to_string(d.M) + ", " + std::to_string(d.N) + ", " + std::to_string(d.K) + ">(dst, a0, b0, c);\n";
+      k += "  __mvcc_tp_mma8<" + T + ", " + std::to_string(d.M) + ", " + std::to_string(d.N) + ", " + std::to_string(d.K) + ">(dst2, a1, b1, c);\n";
+      k += "  threadgroup int scratch[128];\n";
+      k += "  __mvcc_tp_acc2ptx<" + std::to_string(d.M) + ", " + std::to_string(d.N) + ">(ptx, dst, __lane, scratch);\n";
+      k += "  for (int i = 0; i < " + cs + "; i++) out[__lane * " + cs + " + i] = ptx[i];\n";
+      k += "  __mvcc_tp_ptx2acc<" + std::to_string(d.M) + ", " + std::to_string(d.N) + ">(back, ptx, __lane, scratch);\n";
+      k += "  int err = 0; for (int i = 0; i < " + cs + "; i++) err += (back[i] != dst[i] ? 1 : 0) + (dst2[i] != dst[i] ? 1 : 0);\n";
       k += "  out[32 * " + cs + " + __lane] = err;\n";
       k += "}\n\n";
       kernelsOut += k;

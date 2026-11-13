@@ -90,6 +90,7 @@ GUIDANCE = {
     # ---- emitter: mvcc builtins
     "__mvcc_tile_mma: ": "`mvcc::warp_tile` misuse: the accumulator must be a register array and the operands device or shared pointers (`include/mvcc/tile.cuh`).",
     "__mvcc_tp_mma: bad arity": "Internal (tensor recovery emitted a malformed op); report with the `.ll`.",
+    "__mvcc_tp_mma8: bad arity": "Internal (tensor recovery emitted a malformed 8-bit op); report with the `.ll`.",
     "__mvcc_tp_mmad: bad arity": "Internal (tensor recovery emitted a malformed op reading its tiles from memory); report with the `.ll`.",
     "__mvcc_tp_ctstore: bad arity": "Internal (epilogue recovery emitted a cooperative store with the wrong value count); report with the `.ll`.",
     "unknown tensor recovery builtin ": "Internal; report.",
