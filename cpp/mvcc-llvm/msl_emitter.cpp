@@ -18,6 +18,7 @@
 #include "ptx_asm.h"
 #include "recovery_log.h"
 #include "tensor_recovery.h"
+#include "fma_fusion.h"
 #include "wide_vectors.h"
 #include "staging_elim.h"
 
@@ -1015,6 +1016,8 @@ void normalizeModule(Module& M, const EmitOptions& opts, TensorRecoveryResult& t
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
   ModulePassManager MPM;
+  // First, on clang's blocks as the NVPTX backend sees them: the inlining and CFG passes below merge blocks.
+  MPM.addPass(createModuleToFunctionPassAdaptor(FmaFusionPass()));
   MPM.addPass(AlwaysInlinerPass());
   MPM.addPass(GlobalDCEPass());
   MPM.addPass(LaunchBoundsRangePass());
